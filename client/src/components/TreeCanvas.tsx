@@ -1,11 +1,8 @@
 /**
  * TreeCanvas — Full-screen SVG canvas for rendering tree branches
- * Features: zoom/pan, orthogonal connecting lines, draggable viewport
+ * Features: pinch-to-zoom + pan on touch, scroll-wheel zoom on desktop,
+ *           orthogonal connecting lines, visible +/- zoom buttons
  * Design: Obsidian Canvas aesthetic — dark background, dot grid, crisp lines
- * 
- * Multi-level support: each node can have children with orthogonal paths
- * Color picker on long-press: changes node border color
- * Hover highlights the box (not text)
  */
 
 import { useRef, useState, useCallback, useEffect, ReactNode } from "react";
@@ -16,19 +13,25 @@ import {
   NodeColor,
 } from "@/lib/treeData";
 import ColorPicker from "./ColorPicker";
+import { Plus, Minus } from "lucide-react";
 
 interface TreeCanvasProps {
   tree: TreeMap;
 }
 
 const GRID_SIZE = 30;
-const MIN_ZOOM = 0.15;
-const MAX_ZOOM = 3;
 const NODE_RADIUS = 3;
 const ROOT_W = 160;
 const ROOT_H = 52;
 const CHILD_W = 120;
 const CHILD_H = 40;
+
+interface ViewBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 // Dot grid pattern background
 function DotGrid() {
@@ -65,47 +68,33 @@ function DotGrid() {
   );
 }
 
-// Orthogonal path between two points (right-angle turns)
-function getOrthogonalPath(
-  x1: number,
-  y1: number,
-  x2: number,
-  y2: number
-): string {
+function getOrthogonalPath(x1: number, y1: number, x2: number, y2: number): string {
   const midX = (x1 + x2) / 2;
   const midY = (y1 + y2) / 2;
-
   if (Math.abs(x1 - x2) > Math.abs(y1 - y2)) {
-    // Horizontal dominant
     return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
-  } else {
-    // Vertical dominant
-    return `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
   }
-}
-
-interface ViewBox {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
+  return `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
 }
 
 export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Pan/Zoom state
   const [viewBox, setViewBox] = useState<ViewBox>(() => {
-    // Adjust initial viewbox based on tree size
     if (tree.maxDepth <= 3) {
       return { x: -400, y: -600, w: 800, h: 1200 };
     }
     return { x: -1200, y: -1400, w: 2400, h: 2800 };
   });
+
   const [isPanning, setIsPanning] = useState(false);
   const panStart = useRef({ x: 0, y: 0 });
-  const hasDragged = useRef(false);
+
+  // Touch pinch-to-zoom state
+  const initialPinchDistance = useRef<number | null>(null);
+  const initialViewBox = useRef<ViewBox | null>(null);
+  const pinchCenter = useRef({ x: 0, y: 0 });
 
   // Color picker state
   const [colorPickerNodeId, setColorPickerNodeId] = useState<string | null>(null);
@@ -115,51 +104,153 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressThreshold = 500;
 
-  // Zoom with scroll wheel — FIXED: uses correct coordinate math
+  // ---------- ZOOM ----------
+  const zoomByFactor = useCallback((factor: number, centerFracX?: number, centerFracY?: number) => {
+    setViewBox((prev) => {
+      const newW = prev.w * factor;
+      const newH = prev.h * factor;
+      // Clamp: min viewport 150, max 8000
+      if (newW > 8000 || newW < 150) return prev;
+
+      const cx = centerFracX ?? 0.5;
+      const cy = centerFracY ?? 0.5;
+
+      return {
+        x: prev.x + (prev.w - newW) * cx,
+        y: prev.y + (prev.h - newH) * cy,
+        w: newW,
+        h: newH,
+      };
+    });
+  }, []);
+
+  const handleZoomIn = useCallback(() => zoomByFactor(0.8), [zoomByFactor]);
+  const handleZoomOut = useCallback(() => zoomByFactor(1.25), [zoomByFactor]);
+
+  // ---------- SCROLL WHEEL ZOOM (desktop) ----------
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
       e.preventDefault();
       e.stopPropagation();
-
       const svg = svgRef.current;
       if (!svg) return;
       const rect = svg.getBoundingClientRect();
-
-      // Cursor position as fraction of SVG viewport
       const fx = (e.clientX - rect.left) / rect.width;
       const fy = (e.clientY - rect.top) / rect.height;
+      const factor = e.deltaY > 0 ? 1.12 : 0.89;
+      zoomByFactor(factor, fx, fy);
+    },
+    [zoomByFactor]
+  );
 
-      const zoomFactor = e.deltaY > 0 ? 1.12 : 0.89;
+  // ---------- TOUCH: PINCH-TO-ZOOM + PAN ----------
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
 
-      setViewBox((prev) => {
-        const newW = prev.w * zoomFactor;
-        const newH = prev.h * zoomFactor;
+    if (e.touches.length === 2) {
+      // Pinch start
+      e.preventDefault();
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      initialPinchDistance.current = dist;
+      initialViewBox.current = { ...viewBox };
+      // Center of pinch in SVG fractions
+      pinchCenter.current = {
+        x: ((t1.clientX + t2.clientX) / 2 - rect.left) / rect.width,
+        y: ((t1.clientY + t2.clientY) / 2 - rect.top) / rect.height,
+      };
+      setIsPanning(false);
+    } else if (e.touches.length === 1) {
+      // Single touch — check if on a node
+      const touch = e.touches[0];
+      const target = document.elementFromPoint(touch.clientX, touch.clientY);
+      if (target && (target as Element).closest(".tree-node-group")) {
+        // Node touch — handle long press
+        const nodeId = (target as Element).closest(".tree-node-group")?.getAttribute("data-node-id");
+        if (nodeId) {
+          const node = tree.nodeMap[nodeId];
+          if (node) {
+            longPressTimer.current = setTimeout(() => {
+              const scaleX = rect.width / viewBox.w;
+              const scaleY = rect.height / viewBox.h;
+              const screenX = (node.x - viewBox.x) * scaleX;
+              const screenY = (node.y - viewBox.y) * scaleY;
+              setColorPickerScreenPos({ x: screenX, y: screenY });
+              setColorPickerNodeId(nodeId);
+            }, longPressThreshold);
+          }
+        }
+      } else {
+        // Background touch — start pan
+        setIsPanning(true);
+        panStart.current = { x: touch.clientX, y: touch.clientY };
+      }
+    }
+  }, [tree, viewBox]);
 
-        // Clamp zoom
-        if (newW > 8000 || newW < 200) return prev;
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
 
-        // Zoom centered on cursor
-        return {
-          x: prev.x + (prev.w - newW) * fx,
-          y: prev.y + (prev.h - newH) * fy,
-          w: newW,
-          h: newH,
-        };
+    // Clear long press timer on any movement
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+
+    if (e.touches.length === 2 && initialPinchDistance.current !== null) {
+      // Pinch zoom
+      e.preventDefault();
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      const scale = dist / initialPinchDistance.current;
+      const ib = initialViewBox.current!;
+
+      const newW = ib.w / scale;
+      const newH = ib.h / scale;
+
+      if (newW > 8000 || newW < 150) return;
+
+      setViewBox({
+        x: ib.x + (ib.w - newW) * pinchCenter.current.x,
+        y: ib.y + (ib.h - newH) * pinchCenter.current.y,
+        w: newW,
+        h: newH,
       });
-    },
-    []
-  );
+    } else if (e.touches.length === 1 && isPanning) {
+      // Pan
+      const touch = e.touches[0];
+      const dx = ((touch.clientX - panStart.current.x) / rect.width) * viewBox.w;
+      const dy = ((touch.clientY - panStart.current.y) / rect.height) * viewBox.h;
+      setViewBox((prev) => ({
+        ...prev,
+        x: prev.x - dx,
+        y: prev.y - dy,
+      }));
+      panStart.current = { x: touch.clientX, y: touch.clientY };
+    }
+  }, [isPanning, viewBox.w, viewBox.h]);
 
-  // Pan handlers
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      if ((e.target as Element).closest(".tree-node-group")) return;
-      setIsPanning(true);
-      hasDragged.current = false;
-      panStart.current = { x: e.clientX, y: e.clientY };
-    },
-    []
-  );
+  const handleTouchEnd = useCallback(() => {
+    setIsPanning(false);
+    initialPinchDistance.current = null;
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  }, []);
+
+  // ---------- MOUSE PAN ----------
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if ((e.target as Element).closest(".tree-node-group")) return;
+    setIsPanning(true);
+    panStart.current = { x: e.clientX, y: e.clientY };
+  }, []);
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
@@ -169,52 +260,15 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       const rect = svg.getBoundingClientRect();
       const dx = ((e.clientX - panStart.current.x) / rect.width) * viewBox.w;
       const dy = ((e.clientY - panStart.current.y) / rect.height) * viewBox.h;
-
-      if (Math.abs(e.clientX - panStart.current.x) > 2 || Math.abs(e.clientY - panStart.current.y) > 2) {
-        hasDragged.current = true;
-      }
-
-      setViewBox((prev) => ({
-        ...prev,
-        x: prev.x - dx,
-        y: prev.y - dy,
-      }));
+      setViewBox((prev) => ({ ...prev, x: prev.x - dx, y: prev.y - dy }));
       panStart.current = { x: e.clientX, y: e.clientY };
     },
     [isPanning, viewBox.w, viewBox.h]
   );
 
-  const handleMouseUp = useCallback(() => {
-    setIsPanning(false);
-  }, []);
+  const handleMouseUp = useCallback(() => setIsPanning(false), []);
 
-  // Node long-press for color picker
-  const handleNodePressStart = useCallback(
-    (nodeId: string, nodeX: number, nodeY: number) => {
-      hasDragged.current = false;
-      longPressTimer.current = setTimeout(() => {
-        const svg = svgRef.current;
-        if (!svg) return;
-        const rect = svg.getBoundingClientRect();
-        const scaleX = rect.width / viewBox.w;
-        const scaleY = rect.height / viewBox.h;
-        const screenX = (nodeX - viewBox.x) * scaleX;
-        const screenY = (nodeY - viewBox.y) * scaleY;
-        setColorPickerScreenPos({ x: screenX, y: screenY });
-        setColorPickerNodeId(nodeId);
-      }, longPressThreshold);
-    },
-    [viewBox]
-  );
-
-  const handleNodePressEnd = useCallback(() => {
-    if (longPressTimer.current) {
-      clearTimeout(longPressTimer.current);
-      longPressTimer.current = null;
-    }
-  }, []);
-
-  // Close color picker on outside click
+  // Color picker close
   useEffect(() => {
     if (!colorPickerNodeId) return;
     const handler = () => setColorPickerNodeId(null);
@@ -222,12 +276,11 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     return () => window.removeEventListener("click", handler);
   }, [colorPickerNodeId]);
 
-  // Get node dimensions
-  function getNodeSize(node: NodeData): { w: number; h: number } {
+  // ---------- RENDER HELPERS ----------
+  function getNodeSize(node: NodeData) {
     return node.id === tree.root.id ? { w: ROOT_W, h: ROOT_H } : { w: CHILD_W, h: CHILD_H };
   }
 
-  // Collect all edges from the tree (traverse recursively)
   function getAllEdges(node: NodeData): Array<{ source: NodeData; target: NodeData }> {
     const edges: Array<{ source: NodeData; target: NodeData }> = [];
     for (const childRef of node.children) {
@@ -240,59 +293,40 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     return edges;
   }
 
-  // Collect all nodes (traverse recursively)
   function getAllNodes(node: NodeData): NodeData[] {
     const nodes: NodeData[] = [node];
     for (const childRef of node.children) {
       const target = tree.nodeMap[childRef.targetId];
-      if (target) {
-        nodes.push(...getAllNodes(target));
-      }
+      if (target) nodes.push(...getAllNodes(target));
     }
     return nodes;
   }
 
-  // Render edges
   function renderEdges(): ReactNode[] {
-    const edges = getAllEdges(tree.root);
-    return edges.map(({ source, target }, i) => {
-      const sourceSize = getNodeSize(source);
-      const targetSize = getNodeSize(target);
-
-      const sourceX = source.x;
-      const sourceY = source.y;
-      const targetX = target.x;
-      const targetY = target.y;
-
-      // Adjust endpoints to node borders
-      const dx = targetX - sourceX;
-      const dy = targetY - sourceY;
-      const signX = Math.sign(dx) || 1;
-      const signY = Math.sign(dy) || 1;
-
-      const startX = sourceX + (sourceSize.w / 2) * signX;
-      const startY = sourceY + (sourceSize.h / 2) * signY;
-      const endX = targetX - (targetSize.w / 2) * signX;
-      const endY = targetY - (targetSize.h / 2) * signY;
-
-      // Pick the dominant axis for the orthogonal path
-      const isHorizontalDominant = Math.abs(dx) > Math.abs(dy);
-
+    return getAllEdges(tree.root).map(({ source, target }, i) => {
+      const ss = getNodeSize(source);
+      const ts = getNodeSize(target);
+      const dx = target.x - source.x;
+      const dy = target.y - source.y;
+      const sx = Math.sign(dx) || 1;
+      const sy = Math.sign(dy) || 1;
+      const startX = source.x + (ss.w / 2) * sx;
+      const startY = source.y + (ss.h / 2) * sy;
+      const endX = target.x - (ts.w / 2) * sx;
+      const endY = target.y - (ts.h / 2) * sy;
+      const isH = Math.abs(dx) > Math.abs(dy);
       const path = getOrthogonalPath(
-        isHorizontalDominant ? startX : sourceX,
-        isHorizontalDominant ? sourceY : startY,
-        isHorizontalDominant ? endX : targetX,
-        isHorizontalDominant ? targetY : endY
+        isH ? startX : source.x,
+        isH ? source.y : startY,
+        isH ? endX : target.x,
+        isH ? target.y : endY
       );
-
-      const color = VIBGYOR_COLORS[target.color];
-
       return (
         <path
           key={`edge-${i}`}
           d={path}
           fill="none"
-          stroke={color}
+          stroke={VIBGYOR_COLORS[target.color]}
           strokeWidth={2}
           strokeOpacity={0.55}
           markerEnd="url(#arrowhead)"
@@ -301,31 +335,24 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     });
   }
 
-  // Render nodes
   function renderNodes(): ReactNode[] {
-    const nodes = getAllNodes(tree.root);
-    return nodes.map((node) => {
+    return getAllNodes(tree.root).map((node) => {
       const size = getNodeSize(node);
       const color = VIBGYOR_COLORS[node.color];
       const isRoot = node.id === tree.root.id;
-
       return (
         <g
           key={node.id}
           className="tree-node-group"
+          data-node-id={node.id}
           style={{ cursor: "pointer" }}
-          onMouseDown={(e) => {
+          onPointerDown={(e) => {
             e.stopPropagation();
-            handleNodePressStart(node.id, node.x, node.y);
           }}
-          onMouseUp={handleNodePressEnd}
-          onTouchStart={(e) => {
-            e.stopPropagation();
-            handleNodePressStart(node.id, node.x, node.y);
-          }}
-          onTouchEnd={handleNodePressEnd}
+          onTouchStart={(e) => e.stopPropagation()}
+          onTouchEnd={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
         >
-          {/* Node box — the rect gets highlighted, NOT the text */}
           <rect
             x={node.x - size.w / 2}
             y={node.y - size.h / 2}
@@ -336,12 +363,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
             stroke={color}
             strokeWidth={isRoot ? 2 : 1.5}
             strokeOpacity={0.8}
-            className="transition-all duration-120"
-            style={{
-              filter: `drop-shadow(0 0 4px ${color}33)`,
-            }}
           />
-          {/* Label text */}
           {node.label && (
             <text
               x={node.x}
@@ -362,6 +384,17 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     });
   }
 
+  // Prevent default touch gestures on the container
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const prevent = (e: TouchEvent) => {
+      if (e.touches.length > 1) e.preventDefault();
+    };
+    el.addEventListener("touchmove", prevent, { passive: false });
+    return () => el.removeEventListener("touchmove", prevent);
+  }, []);
+
   return (
     <div
       ref={containerRef}
@@ -378,6 +411,9 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
         onWheel={handleWheel}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
         style={{
           cursor: isPanning ? "grabbing" : "grab",
           touchAction: "none",
@@ -387,6 +423,24 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
         {renderEdges()}
         {renderNodes()}
       </svg>
+
+      {/* Zoom controls — bottom right */}
+      <div className="absolute bottom-6 right-6 flex flex-col gap-2 z-10">
+        <button
+          onClick={handleZoomIn}
+          className="w-10 h-10 bg-[#13131a] border border-[#2a2a35] rounded-lg flex items-center justify-center text-[#e4e4e7] hover:bg-[#1a1a24] hover:border-[#3a3a45] active:scale-95 transition-all"
+          title="Zoom in"
+        >
+          <Plus className="w-5 h-5" strokeWidth={1.5} />
+        </button>
+        <button
+          onClick={handleZoomOut}
+          className="w-10 h-10 bg-[#13131a] border border-[#2a2a35] rounded-lg flex items-center justify-center text-[#e4e4e7] hover:bg-[#1a1a24] hover:border-[#3a3a45] active:scale-95 transition-all"
+          title="Zoom out"
+        >
+          <Minus className="w-5 h-5" strokeWidth={1.5} />
+        </button>
+      </div>
 
       {/* Color picker overlay */}
       {colorPickerNodeId && (
