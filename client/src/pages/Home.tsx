@@ -82,6 +82,9 @@ export default function Home() {
               </h2>
               <p className="text-[#6b6b75] text-sm font-sans">
                 {tree.description}
+              <span className="ml-1.5 text-[#4a4a55] text-xs font-mono">
+                ({tree.maxDepth} levels)
+              </span>
               </p>
 
               {/* Branch count */}
