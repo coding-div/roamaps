@@ -3,6 +3,8 @@
  * Multi-level tree with proper branching — each node can have its own children.
  * Tree 1: up to 3 levels deep
  * Tree 2: up to 8 levels deep
+ * Phase 2: Added independent arrow colors, editable node labels (max 50 chars),
+ *           and arrow edge metadata.
  */
 
 export type NodeColor =
@@ -24,6 +26,10 @@ export const VIBGYOR_COLORS: Record<NodeColor, string> = {
   red: "#EF4444",
 };
 
+export const COLOR_ORDER: NodeColor[] = ["violet", "indigo", "blue", "green", "yellow", "orange", "red"];
+
+export const MAX_LABEL_LENGTH = 50;
+
 export type Direction = "up" | "down" | "left" | "right";
 
 export interface NodeData {
@@ -37,6 +43,8 @@ export interface NodeData {
 
 export interface ChildRef {
   targetId: string;
+  /** Independent color for this specific arrow/edge */
+  color: NodeColor;
 }
 
 export interface TreeMap {
@@ -44,21 +52,63 @@ export interface TreeMap {
   title: string;
   description: string;
   root: NodeData;
-  // Flat map of all nodes by id for quick lookup
   nodeMap: Record<string, NodeData>;
   maxDepth: number;
 }
 
-// Tree 1: Small tree — 3 levels deep
-// Structure:
-//          root
-//     /     |      \
-//   c1(up) c2(left) c3(right)
-//   /  \           |
-//  c4   c5        c6(down)
-//   |
-//  c7(down)
+/**
+ * Collect all edges (source → target) with their arrow color.
+ * Returns [{ source, target, arrowColor, targetChildIndex }]
+ */
+export function getAllEdges(tree: TreeMap): Array<{
+  source: NodeData;
+  target: NodeData;
+  arrowColor: NodeColor;
+  sourceChildIndex: number;
+}> {
+  const edges: Array<{
+    source: NodeData;
+    target: NodeData;
+    arrowColor: NodeColor;
+    sourceChildIndex: number;
+  }> = [];
 
+  function traverse(node: NodeData) {
+    for (let i = 0; i < node.children.length; i++) {
+      const childRef = node.children[i];
+      const target = tree.nodeMap[childRef.targetId];
+      if (target) {
+        edges.push({
+          source: node,
+          target,
+          arrowColor: childRef.color,
+          sourceChildIndex: i,
+        });
+        traverse(target);
+      }
+    }
+  }
+
+  traverse(tree.root);
+  return edges;
+}
+
+export function getAllNodes(tree: TreeMap): NodeData[] {
+  const nodes: NodeData[] = [];
+
+  function traverse(node: NodeData) {
+    nodes.push(node);
+    for (const childRef of node.children) {
+      const target = tree.nodeMap[childRef.targetId];
+      if (target) traverse(target);
+    }
+  }
+
+  traverse(tree.root);
+  return nodes;
+}
+
+// Tree 1: Small tree — 3 levels deep
 export const tree1: TreeMap = (() => {
   const root: NodeData = {
     id: "t1-root",
@@ -67,9 +117,9 @@ export const tree1: TreeMap = (() => {
     label: "Main Topic",
     color: "blue",
     children: [
-      { targetId: "t1-c1" },
-      { targetId: "t1-c2" },
-      { targetId: "t1-c3" },
+      { targetId: "t1-c1", color: "violet" },
+      { targetId: "t1-c2", color: "green" },
+      { targetId: "t1-c3", color: "orange" },
     ],
   };
 
@@ -80,8 +130,8 @@ export const tree1: TreeMap = (() => {
     label: "",
     color: "violet",
     children: [
-      { targetId: "t1-c4" },
-      { targetId: "t1-c5" },
+      { targetId: "t1-c4", color: "indigo" },
+      { targetId: "t1-c5", color: "violet" },
     ],
   };
 
@@ -101,7 +151,7 @@ export const tree1: TreeMap = (() => {
     label: "",
     color: "orange",
     children: [
-      { targetId: "t1-c6" },
+      { targetId: "t1-c6", color: "red" },
     ],
   };
 
@@ -121,7 +171,7 @@ export const tree1: TreeMap = (() => {
     label: "",
     color: "violet",
     children: [
-      { targetId: "t1-c7" },
+      { targetId: "t1-c7", color: "indigo" },
     ],
   };
 
@@ -165,10 +215,7 @@ export const tree1: TreeMap = (() => {
 })();
 
 // Tree 2: Big tree — up to 8 levels deep
-// Structure grows outward organically with up to 8 branches per node at different levels
-
 export const tree2: TreeMap = (() => {
-  // Root with 5 first-level branches (asymmetric)
   const root: NodeData = {
     id: "t2-root",
     x: 0,
@@ -176,112 +223,109 @@ export const tree2: TreeMap = (() => {
     label: "Main Topic",
     color: "blue",
     children: [
-      { targetId: "t2-a1" },
-      { targetId: "t2-a2" },
-      { targetId: "t2-a3" },
-      { targetId: "t2-a4" },
-      { targetId: "t2-a5" },
+      { targetId: "t2-a1", color: "violet" },
+      { targetId: "t2-a2", color: "indigo" },
+      { targetId: "t2-a3", color: "green" },
+      { targetId: "t2-a4", color: "orange" },
+      { targetId: "t2-a5", color: "yellow" },
     ],
   };
 
-  // Level 1: 5 branches from root
   const a1: NodeData = { id: "t2-a1", x: 0, y: -180, label: "", color: "violet", children: [
-    { targetId: "t2-b1" },
-    { targetId: "t2-b2" },
-    { targetId: "t2-b3" },
+    { targetId: "t2-b1", color: "blue" },
+    { targetId: "t2-b2", color: "violet" },
+    { targetId: "t2-b3", color: "indigo" },
   ]};
 
   const a2: NodeData = { id: "t2-a2", x: -200, y: -120, label: "", color: "indigo", children: [
-    { targetId: "t2-b4" },
-    { targetId: "t2-b5" },
+    { targetId: "t2-b4", color: "blue" },
+    { targetId: "t2-b5", color: "green" },
   ]};
 
   const a3: NodeData = { id: "t2-a3", x: -240, y: 40, label: "", color: "green", children: [
-    { targetId: "t2-b6" },
+    { targetId: "t2-b6", color: "green" },
   ]};
 
   const a4: NodeData = { id: "t2-a4", x: 200, y: -100, label: "", color: "orange", children: [
-    { targetId: "t2-b7" },
-    { targetId: "t2-b8" },
+    { targetId: "t2-b7", color: "orange" },
+    { targetId: "t2-b8", color: "red" },
   ]};
 
   const a5: NodeData = { id: "t2-a5", x: 100, y: 160, label: "", color: "yellow", children: [
-    { targetId: "t2-b9" },
-    { targetId: "t2-b10" },
+    { targetId: "t2-b9", color: "yellow" },
+    { targetId: "t2-b10", color: "orange" },
   ]};
 
-  // Level 2: branches from level 1
   const b1: NodeData = { id: "t2-b1", x: -120, y: -340, label: "", color: "blue", children: [
-    { targetId: "t2-c1" },
-    { targetId: "t2-c2" },
+    { targetId: "t2-c1", color: "violet" },
+    { targetId: "t2-c2", color: "indigo" },
   ]};
 
   const b2: NodeData = { id: "t2-b2", x: 100, y: -360, label: "", color: "violet", children: [
-    { targetId: "t2-c3" },
+    { targetId: "t2-c3", color: "violet" },
   ]};
 
   const b3: NodeData = { id: "t2-b3", x: 0, y: -400, label: "", color: "indigo", children: [] };
 
   const b4: NodeData = { id: "t2-b4", x: -360, y: -220, label: "", color: "blue", children: [
-    { targetId: "t2-c4" },
+    { targetId: "t2-c4", color: "blue" },
   ]};
 
   const b5: NodeData = { id: "t2-b5", x: -320, y: -20, label: "", color: "green", children: [
-    { targetId: "t2-c5" },
-    { targetId: "t2-c6" },
+    { targetId: "t2-c5", color: "green" },
+    { targetId: "t2-c6", color: "green" },
   ]};
 
   const b6: NodeData = { id: "t2-b6", x: -400, y: 40, label: "", color: "green", children: [
-    { targetId: "t2-c7" },
+    { targetId: "t2-c7", color: "green" },
   ]};
 
   const b7: NodeData = { id: "t2-b7", x: 360, y: -240, label: "", color: "orange", children: [
-    { targetId: "t2-c8" },
+    { targetId: "t2-c8", color: "orange" },
   ]};
 
   const b8: NodeData = { id: "t2-b8", x: 320, y: -80, label: "", color: "red", children: [
-    { targetId: "t2-c9" },
-    { targetId: "t2-c10" },
+    { targetId: "t2-c9", color: "red" },
+    { targetId: "t2-c10", color: "red" },
   ]};
 
   const b9: NodeData = { id: "t2-b9", x: -40, y: 320, label: "", color: "yellow", children: [
-    { targetId: "t2-c11" },
+    { targetId: "t2-c11", color: "yellow" },
   ]};
 
   const b10: NodeData = { id: "t2-b10", x: 260, y: 300, label: "", color: "orange", children: [
-    { targetId: "t2-c12" },
+    { targetId: "t2-c12", color: "orange" },
   ]};
 
-  // Level 3: branches from level 2
   const c1: NodeData = { id: "t2-c1", x: -200, y: -500, label: "", color: "violet", children: [
-    { targetId: "t2-d1" },
+    { targetId: "t2-d1", color: "violet" },
   ]};
 
   const c2: NodeData = { id: "t2-c2", x: -60, y: -520, label: "", color: "indigo", children: [] };
 
   const c3: NodeData = { id: "t2-c3", x: 80, y: -520, label: "", color: "violet", children: [
-    { targetId: "t2-d2" },
+    { targetId: "t2-d2", color: "violet" },
   ]};
 
   const c4: NodeData = { id: "t2-c4", x: -460, y: -340, label: "", color: "blue", children: [
-    { targetId: "t2-d3" },
+    { targetId: "t2-d3", color: "blue" },
   ]};
 
   const c5: NodeData = { id: "t2-c5", x: -440, y: -60, label: "", color: "green", children: [] };
 
   const c6: NodeData = { id: "t2-c6", x: -400, y: 160, label: "", color: "green", children: [
-    { targetId: "t2-d4" },
+    { targetId: "t2-d4", color: "green" },
   ]};
 
   const c7: NodeData = { id: "t2-c7", x: -520, y: 40, label: "", color: "green", children: [
-    { targetId: "t2-d5" },
-    { targetId: "t2-d6" },
+    { targetId: "t2-d5", color: "green" },
+    { targetId: "t2-d6", color: "green" },
   ]};
 
   const c8: NodeData = { id: "t2-c8", x: 480, y: -360, label: "", color: "orange", children: [] };
 
   const c9: NodeData = { id: "t2-c9", x: 440, y: -160, label: "", color: "red", children: [
-    { targetId: "t2-d7" },
+    { targetId: "t2-d7", color: "red" },
   ]};
 
   const c10: NodeData = { id: "t2-c10", x: 420, y: 40, label: "", color: "red", children: [] };
@@ -289,60 +333,55 @@ export const tree2: TreeMap = (() => {
   const c11: NodeData = { id: "t2-c11", x: -160, y: 460, label: "", color: "yellow", children: [] };
 
   const c12: NodeData = { id: "t2-c12", x: 380, y: 420, label: "", color: "orange", children: [
-    { targetId: "t2-d8" },
+    { targetId: "t2-d8", color: "orange" },
   ]};
 
-  // Level 4: branches from level 3
   const d1: NodeData = { id: "t2-d1", x: -260, y: -640, label: "", color: "violet", children: [
-    { targetId: "t2-e1" },
+    { targetId: "t2-e1", color: "indigo" },
   ]};
 
   const d2: NodeData = { id: "t2-d2", x: 40, y: -660, label: "", color: "violet", children: [] };
 
   const d3: NodeData = { id: "t2-d3", x: -540, y: -440, label: "", color: "blue", children: [
-    { targetId: "t2-e2" },
+    { targetId: "t2-e2", color: "blue" },
   ]};
 
   const d4: NodeData = { id: "t2-d4", x: -500, y: 260, label: "", color: "green", children: [] };
 
   const d5: NodeData = { id: "t2-d5", x: -640, y: -20, label: "", color: "green", children: [
-    { targetId: "t2-e3" },
+    { targetId: "t2-e3", color: "green" },
   ]};
 
   const d6: NodeData = { id: "t2-d6", x: -600, y: 140, label: "", color: "green", children: [] };
 
   const d7: NodeData = { id: "t2-d7", x: 540, y: -260, label: "", color: "red", children: [
-    { targetId: "t2-e4" },
+    { targetId: "t2-e4", color: "red" },
   ]};
 
   const d8: NodeData = { id: "t2-d8", x: 480, y: 520, label: "", color: "orange", children: [] };
 
-  // Level 5: branches from level 4
   const e1: NodeData = { id: "t2-e1", x: -340, y: -760, label: "", color: "indigo", children: [
-    { targetId: "t2-f1" },
+    { targetId: "t2-f1", color: "indigo" },
   ]};
 
   const e2: NodeData = { id: "t2-e2", x: -620, y: -560, label: "", color: "blue", children: [] };
 
   const e3: NodeData = { id: "t2-e3", x: -740, y: -120, label: "", color: "green", children: [
-    { targetId: "t2-f2" },
+    { targetId: "t2-f2", color: "green" },
   ]};
 
   const e4: NodeData = { id: "t2-e4", x: 640, y: -380, label: "", color: "red", children: [] };
 
-  // Level 6
   const f1: NodeData = { id: "t2-f1", x: -420, y: -860, label: "", color: "indigo", children: [
-    { targetId: "t2-g1" },
+    { targetId: "t2-g1", color: "indigo" },
   ]};
 
   const f2: NodeData = { id: "t2-f2", x: -820, y: -200, label: "", color: "green", children: [] };
 
-  // Level 7
   const g1: NodeData = { id: "t2-g1", x: -420, y: -980, label: "", color: "indigo", children: [
-    { targetId: "t2-h1" },
+    { targetId: "t2-h1", color: "violet" },
   ]};
 
-  // Level 8 (max depth)
   const h1: NodeData = { id: "t2-h1", x: -340, y: -1080, label: "", color: "violet", children: [] };
 
   const nodeMap: Record<string, NodeData> = {
