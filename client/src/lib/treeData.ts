@@ -73,7 +73,9 @@ export function getAllEdges(tree: TreeMap): Array<{
     sourceChildIndex: number;
   }> = [];
 
-  function traverse(node: NodeData) {
+  // Iterate over ALL nodes in nodeMap (not just from root)
+  // so orphaned/disconnected nodes still have their edges rendered
+  for (const node of Object.values(tree.nodeMap)) {
     for (let i = 0; i < node.children.length; i++) {
       const childRef = node.children[i];
       const target = tree.nodeMap[childRef.targetId];
@@ -84,28 +86,16 @@ export function getAllEdges(tree: TreeMap): Array<{
           arrowColor: childRef.color,
           sourceChildIndex: i,
         });
-        traverse(target);
       }
     }
   }
 
-  traverse(tree.root);
   return edges;
 }
 
 export function getAllNodes(tree: TreeMap): NodeData[] {
-  const nodes: NodeData[] = [];
-
-  function traverse(node: NodeData) {
-    nodes.push(node);
-    for (const childRef of node.children) {
-      const target = tree.nodeMap[childRef.targetId];
-      if (target) traverse(target);
-    }
-  }
-
-  traverse(tree.root);
-  return nodes;
+  // Return ALL nodes from nodeMap — including orphaned/disconnected ones
+  return Object.values(tree.nodeMap);
 }
 
 // Tree 1: Small tree — 3 levels deep
