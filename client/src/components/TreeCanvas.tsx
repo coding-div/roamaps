@@ -17,7 +17,8 @@ import {
   getAllNodes as getNodesFromTree,
 } from "@/lib/treeData";
 import ActionPanel from "./ActionPanel";
-import { Plus, Minus, Home } from "lucide-react";
+import { useRoadmaps } from "@/contexts/RoadmapContext";
+import { Plus, Minus, Home, Link2, MousePointer2 } from "lucide-react";
 
 interface TreeCanvasProps {
   tree: TreeMap;
@@ -265,10 +266,12 @@ function pathsIntersect(
 }
 
 export default function TreeCanvas({ tree }: TreeCanvasProps) {
+  const { dispatch } = useRoadmaps();
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const [renderKey, setRenderKey] = useState(0);
+  const [connectMode, setConnectMode] = useState(false);
+  const [connectSourceId, setConnectSourceId] = useState<string | null>(null);
 
   const [viewBox, setViewBox] = useState<ViewBox>(() => {
     if (tree.maxDepth <= 3) {
@@ -483,14 +486,36 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     }
   }
 
-  function forceRerender() {
-    setRenderKey((k) => k + 1);
+  function handleNodeSelection(nodeId: string) {
+    if (!connectMode) return;
+    if (!connectSourceId) {
+      setConnectSourceId(nodeId);
+      return;
+    }
+    if (connectSourceId !== nodeId) {
+      dispatch({ type: "ADD_ARROW", treeId: tree.id, sourceId: connectSourceId, targetId: nodeId, color: "blue" });
+    }
+    setConnectSourceId(null);
+    setConnectMode(false);
+  }
+
+  function addIndependentNode() {
+    const nodeId = `${tree.id}-node-${Date.now()}`;
+    const node: NodeData = {
+      id: nodeId,
+      x: viewBox.x + viewBox.w / 2,
+      y: viewBox.y + viewBox.h / 2,
+      label: "New node",
+      color: "violet",
+      children: [],
+    };
+    dispatch({ type: "ADD_NODE", treeId: tree.id, node });
   }
 
   // ─── RENDER ───
   const edges = getEdgesFromTree(tree);
   const nodes = getNodesFromTree(tree);
-  const renderId = `${tree.id}-${renderKey}`;
+  const renderId = tree.id;
 
   // Precompute all paths for crossing detection
   const pathSegments: Array<Array<{ x: number; y: number }>> = [];
@@ -602,6 +627,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
           style={{ cursor: "pointer" }}
           onTouchStart={(e) => {
             e.stopPropagation();
+            if (connectMode) { handleNodeSelection(node.id); return; }
             const touch = e.touches[0];
             startLongPress({ type: "node", nodeId: node.id }, node, touch.clientX, touch.clientY);
           }}
@@ -618,6 +644,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
           }}
           onMouseDown={(e) => {
             e.stopPropagation();
+            if (connectMode) { handleNodeSelection(node.id); return; }
             startLongPress({ type: "node", nodeId: node.id }, node, e.clientX, e.clientY);
           }}
           onMouseUp={endLongPress}
@@ -710,6 +737,11 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       </svg>
 
       {/* Zoom controls */}
+      <div className="absolute top-16 left-5 z-10 flex items-center gap-2">
+        <button onClick={addIndependentNode} className="flex items-center gap-2 rounded-lg border border-[#2a2a35] bg-[#13131a] px-3 py-2 text-xs text-[#c4c4cc] hover:border-[#3B82F6]/60 hover:text-white active:scale-95 transition-all" title="Add an independent node"><Plus className="w-4 h-4" />Add node</button>
+        <button onClick={() => { setConnectMode((mode) => !mode); setConnectSourceId(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs active:scale-95 transition-all ${connectMode ? "border-[#3B82F6] bg-[#3B82F6]/15 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#3B82F6]/60 hover:text-white"}`} title="Connect two nodes"><Link2 className="w-4 h-4" />{connectMode ? (connectSourceId ? "Select target" : "Select source") : "Connect nodes"}</button>
+        {connectMode && <button onClick={() => { setConnectMode(false); setConnectSourceId(null); }} className="rounded-lg border border-[#2a2a35] bg-[#13131a] p-2 text-[#8a8a95] hover:text-white" title="Cancel connection mode"><MousePointer2 className="w-4 h-4" /></button>}
+      </div>
       <div className="absolute bottom-6 right-6 flex flex-col gap-2 z-10">
         <button
           onClick={handleZoomIn}
@@ -741,8 +773,8 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
           y={actionPanelScreenPos.y}
           target={actionPanelTarget}
           tree={tree}
+          dispatch={dispatch}
           onClose={() => setActionPanelTarget(null)}
-          onTreeChange={forceRerender}
         />
       )}
     </div>
