@@ -39,7 +39,7 @@ export default function Home() {
       <header className="px-6 pt-12 pb-8 sm:px-10 sm:pt-16">
         <div className="transition-all duration-500 ease-out" style={{ opacity: visible ? 1 : 0, transform: visible ? "translateY(0)" : "translateY(16px)" }}>
           <div className="flex items-center gap-3 mb-3">
-            <img src="/manus-storage/logo-roamaps_648fdac2.png" alt="Roamaps" className="w-8 h-8" />
+            <div className="w-8 h-8 rounded-lg border border-[#2a2a35] bg-[#13131a] flex items-center justify-center"><GitBranch className="w-4 h-4 text-[#3B82F6]" strokeWidth={1.5} /></div>
             <h1 className="text-[#e4e4e7] text-2xl font-bold tracking-tight font-['Space_Grotesk',sans-serif]">Roamaps</h1>
           </div>
           <p className="text-[#6b6b75] text-sm font-sans max-w-md">Your knowledge, mapped.</p>

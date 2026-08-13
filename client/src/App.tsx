@@ -1,7 +1,8 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
-import { Route, Switch } from "wouter";
+import { Route, Switch, Router } from "wouter";
+import { useHashLocation } from "wouter/use-hash-location";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { RoadmapProvider } from "./contexts/RoadmapContext";
@@ -9,7 +10,7 @@ import Home from "./pages/Home";
 import TreeView from "./pages/TreeView";
 
 
-function Router() {
+function AppRoutes() {
   return (
     <Switch>
       <Route path={"/"} component={Home} />
@@ -36,7 +37,9 @@ function App() {
         <RoadmapProvider>
           <TooltipProvider>
             <Toaster />
-            <Router />
+            <Router hook={useHashLocation}>
+              <AppRoutes />
+            </Router>
           </TooltipProvider>
         </RoadmapProvider>
       </ThemeProvider>
