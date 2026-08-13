@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect } from "react";
-import { VIBGYOR_COLORS, NodeColor, COLOR_ORDER, TreeMap, NodeData, MAX_LABEL_LENGTH, getAllEdges } from "@/lib/treeData";
+import { VIBGYOR_COLORS, NodeColor, COLOR_ORDER, TreeMap, NodeData, MAX_LABEL_LENGTH } from "@/lib/treeData";
 import type { RoadmapAction } from "@/contexts/RoadmapContext";
 import { Palette, Type, Trash2, X, Check } from "lucide-react";
 
-type PanelTarget = { type: "node"; nodeId: string } | { type: "arrow"; edgeIndex: number };
+type PanelTarget =
+  | { type: "node"; nodeId: string }
+  | { type: "arrow"; sourceId: string; targetId: string };
 
 interface ActionPanelProps {
   x: number;
@@ -28,10 +30,7 @@ export default function ActionPanel({ x, y, target, tree, dispatch, onClose }: A
 
   function changeColor(color: NodeColor) {
     if (target.type === "node") dispatch({ type: "UPDATE_NODE_COLOR", treeId: tree.id, nodeId: target.nodeId, color });
-    else {
-      const edge = getAllEdges(tree)[target.edgeIndex];
-      if (edge) dispatch({ type: "UPDATE_ARROW_COLOR", treeId: tree.id, sourceId: edge.source.id, targetId: edge.target.id, color });
-    }
+    else dispatch({ type: "UPDATE_ARROW_COLOR", treeId: tree.id, sourceId: target.sourceId, targetId: target.targetId, color });
     onClose();
   }
 
@@ -42,10 +41,7 @@ export default function ActionPanel({ x, y, target, tree, dispatch, onClose }: A
 
   function remove() {
     if (target.type === "node") dispatch({ type: "REMOVE_NODE", treeId: tree.id, nodeId: target.nodeId });
-    else {
-      const edge = getAllEdges(tree)[target.edgeIndex];
-      if (edge) dispatch({ type: "REMOVE_ARROW", treeId: tree.id, sourceId: edge.source.id, targetId: edge.target.id });
-    }
+    else dispatch({ type: "REMOVE_ARROW", treeId: tree.id, sourceId: target.sourceId, targetId: target.targetId });
     onClose();
   }
 

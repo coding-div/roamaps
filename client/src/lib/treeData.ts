@@ -51,7 +51,8 @@ export interface TreeMap {
   id: string;
   title: string;
   description: string;
-  root: NodeData;
+  /** The active root may be empty after the root node is removed. */
+  root: NodeData | null;
   nodeMap: Record<string, NodeData>;
   maxDepth: number;
 }

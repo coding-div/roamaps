@@ -1,6 +1,11 @@
+/**
+ * Roamaps style reminder — Obsidian Cartography: near-black graphite canvas,
+ * route cobalt focus, IBM Plex Mono metadata, and quiet spatial hierarchy.
+ */
+
 import { useLocation } from "wouter";
 import { useEffect, useState } from "react";
-import { GitBranch, Plus } from "lucide-react";
+import { GitBranch, Plus, ArrowUpRight } from "lucide-react";
 import { useRoadmaps } from "@/contexts/RoadmapContext";
 import type { TreeMap } from "@/lib/treeData";
 
@@ -35,39 +40,44 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen bg-[#0a0a0f] flex flex-col">
-      <header className="px-6 pt-12 pb-8 sm:px-10 sm:pt-16">
-        <div className="transition-all duration-500 ease-out" style={{ opacity: visible ? 1 : 0, transform: visible ? "translateY(0)" : "translateY(16px)" }}>
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-8 h-8 rounded-lg border border-[#2a2a35] bg-[#13131a] flex items-center justify-center"><GitBranch className="w-4 h-4 text-[#3B82F6]" strokeWidth={1.5} /></div>
-            <h1 className="text-[#e4e4e7] text-2xl font-bold tracking-tight font-['Space_Grotesk',sans-serif]">Roamaps</h1>
-          </div>
-          <p className="text-[#6b6b75] text-sm font-sans max-w-md">Your knowledge, mapped.</p>
+    <div className="relative min-h-screen overflow-hidden bg-[#090a0f] text-[#e4e4e7]">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_73%_18%,rgba(76,125,255,0.12),transparent_32%),linear-gradient(180deg,rgba(9,10,15,0.25),#090a0f_68%)]" />
+      <div className="pointer-events-none absolute inset-y-0 right-0 hidden w-[56%] bg-cover bg-center opacity-50 lg:block" style={{ backgroundImage: "url('/manus-storage/roamaps-canvas-constellation_dcda31e9.png')" }} />
+
+      <header className="relative z-10 flex items-center justify-between px-6 pt-7 sm:px-10 lg:px-14">
+        <div className="flex items-center gap-3">
+          <img src="/manus-storage/roamaps-mark_a6c218e4.png" alt="Roamaps mark" className="h-9 w-9 object-contain" />
+          <span className="font-['Space_Grotesk',sans-serif] text-lg font-semibold tracking-[-0.065em]"><span className="mr-[1px] text-[#4c7dff]">R</span>oamaps</span>
         </div>
+        <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-[#596073]">Local canvas / v1</span>
       </header>
 
-      <main className="flex-1 px-6 sm:px-10 pb-12">
-        <div className="flex items-center justify-between max-w-2xl mb-5">
-          <p className="text-[#8a8a95] text-xs uppercase tracking-[0.2em] font-sans">Your roadmaps</p>
-          <button onClick={handleCreate} className="flex items-center gap-2 rounded-md border border-[#2a2a35] bg-[#13131a] px-3 py-2 text-xs text-[#c4c4cc] hover:border-[#3B82F6]/60 hover:text-white transition-colors active:scale-95">
-            <Plus className="w-3.5 h-3.5" /> New roadmap
-          </button>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 max-w-2xl">
-          {trees.map((tree, index) => (
-            <button key={tree.id} onClick={() => navigate(`/tree/${tree.id.replace("tree-", "")}`)} className="group relative text-left bg-[#13131a] border border-[#2a2a35] rounded-lg p-6 transition-all duration-200 hover:border-[#3a3a45] hover:bg-[#16161e] hover:shadow-lg hover:shadow-black/20 active:scale-[0.98]" style={{ opacity: visible ? 1 : 0, transform: visible ? "translateY(0)" : "translateY(16px)", transitionDelay: `${200 + index * 80}ms` }}>
-              <div className="absolute top-0 left-6 right-6 h-[1px]" style={{ background: `linear-gradient(90deg, transparent, ${tree.root.color === "blue" ? "#3B82F6" : "#8B5CF6"}40, transparent)` }} />
-              <div className="mb-4"><GitBranch className="w-6 h-6 text-[#3a3a45] group-hover:text-[#6b6b75] transition-colors" strokeWidth={1.5} /></div>
-              <h2 className="text-[#e4e4e7] text-base font-semibold font-['Space_Grotesk',sans-serif] mb-1">{tree.title}</h2>
-              <p className="text-[#6b6b75] text-sm font-sans">{tree.description}<span className="ml-1.5 text-[#4a4a55] text-xs font-mono">({tree.maxDepth} levels)</span></p>
-              <div className="mt-4 flex items-center gap-1.5"><span className="text-[#4a4a55] text-xs font-mono">{Object.keys(tree.nodeMap).length} nodes</span></div>
-              <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity"><span className="text-[#6b6b75] text-lg">→</span></div>
-            </button>
-          ))}
-        </div>
+      <main className="relative z-10 px-6 pb-14 pt-20 sm:px-10 sm:pt-28 lg:px-14 lg:pt-36">
+        <section className="max-w-3xl">
+          <p className="mb-6 flex items-center gap-3 font-mono text-[10px] uppercase tracking-[0.28em] text-[#6f8de3]"><span className="h-px w-8 bg-[#4c7dff]" /> Visual thinking instrument</p>
+          <h1 className="max-w-2xl font-['Space_Grotesk',sans-serif] text-5xl font-semibold leading-[0.98] tracking-[-0.065em] text-[#f2f4fa] sm:text-7xl">Build the shape of what you know.</h1>
+          <p className="mt-7 max-w-lg text-base leading-7 text-[#8a91a3]">A quiet canvas for turning subjects, systems, and loose ideas into maps you can see, edit, and follow.</p>
+          <div className="mt-9 flex flex-wrap items-center gap-3">
+            <button onClick={handleCreate} className="group flex items-center gap-2 rounded-sm border border-[#6f92ff] bg-[#4c7dff] px-4 py-3 font-['Space_Grotesk',sans-serif] text-sm font-medium text-white transition-all duration-200 hover:bg-[#628dff] active:scale-[0.97]"><Plus className="h-4 w-4" />Start a new roadmap</button>
+            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-[#5e6577]">No account required</span>
+          </div>
+        </section>
+
+        <section className="mt-28 max-w-5xl lg:mt-40">
+          <div className="mb-5 flex items-end justify-between border-b border-[#1d2230] pb-3"><div><p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[#68708a]">01 / Your roadmaps</p><p className="mt-2 text-sm text-[#71798d]">Open a route or place a new pin.</p></div><button onClick={handleCreate} className="hidden items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-[#8195d8] transition-colors hover:text-white sm:flex">New roadmap <ArrowUpRight className="h-3.5 w-3.5" /></button></div>
+          <div className="grid max-w-4xl grid-cols-1 gap-4 md:grid-cols-2">
+            {trees.map((tree, index) => (
+              <button key={tree.id} onClick={() => navigate(`/tree/${tree.id.replace("tree-", "")}`)} className="group relative overflow-hidden rounded-[4px] border border-[#222837] bg-[#10131b]/90 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-[#4c7dff]/55 hover:bg-[#131824] active:scale-[0.99]" style={{ opacity: visible ? 1 : 0, transform: visible ? undefined : "translateY(14px)", transitionDelay: `${180 + index * 70}ms` }}>
+                <div className="absolute inset-y-0 left-0 w-[3px] bg-[#4c7dff]/35 transition-colors group-hover:bg-[#4c7dff]" /><div className="absolute left-[-2px] top-7 h-1 w-1 bg-[#4c7dff]" /><div className="absolute right-4 top-3 font-mono text-[8px] tracking-[0.18em] text-[#3f4961]">X 0{index + 2} · Y 1{index + 4}</div>
+                <div className="relative h-32 overflow-hidden border-b border-[#1d2230] bg-[#0c0f16]"><img src={index % 2 === 0 ? "/manus-storage/roamaps-tree-preview-a_c0166a80.png" : "/manus-storage/roamaps-tree-preview-b_1ff7c59e.png"} alt="" className="h-full w-full object-cover opacity-80 transition-transform duration-500 group-hover:scale-[1.04]" /><div className="absolute inset-0 bg-gradient-to-t from-[#10131b] via-transparent to-transparent" /><span className="absolute bottom-3 left-4 font-mono text-[8px] uppercase tracking-[0.22em] text-[#7581a0]">Plotted route / {String(index + 1).padStart(2, "0")}</span></div>
+                <div className="relative p-5"><div className="mb-5 flex items-center justify-between"><span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#5c6680]">Map {String(index + 1).padStart(2, "0")} / archive</span><GitBranch className="h-4 w-4 text-[#4c7dff]/70" strokeWidth={1.4} /></div><h2 className="font-['Space_Grotesk',sans-serif] text-xl font-medium tracking-[-0.03em] text-[#e9ecf5]">{tree.title}</h2><p className="mt-1.5 text-sm text-[#737b8e]">{tree.description}</p><div className="mt-6 flex items-center gap-4 font-mono text-[10px] uppercase tracking-[0.13em] text-[#565f75]"><span>{Object.keys(tree.nodeMap).length} nodes</span><span>{tree.maxDepth} levels</span><span className="ml-auto text-[#7888bd] transition-transform group-hover:translate-x-1">Open →</span></div></div>
+              </button>
+            ))}
+          </div>
+        </section>
       </main>
 
-      <footer className="px-6 sm:px-10 pb-8"><p className="text-[#3a3a45] text-xs font-sans">Changes save automatically in this browser</p></footer>
+      <footer className="relative z-10 flex flex-col gap-2 border-t border-[#171b27] px-6 py-6 font-mono text-[10px] uppercase tracking-[0.16em] text-[#4e566a] sm:flex-row sm:items-center sm:justify-between sm:px-10 lg:px-14"><span>Changes save automatically in this browser</span><span>Place a node. Draw the route.</span></footer>
     </div>
   );
 }
