@@ -33,3 +33,24 @@ Arrow-removal recovery test passed: a synthetic touch long-press with only 3px o
 History and routing checks passed: removal reduced the rendered arrow count from 7 to 6, Undo restored 7, Redo returned to 6, and a final Undo restored the clean 7-arrow demo. Five Tree 1 routes currently render as single-segment aligned paths; the remaining routes retain multi-segment orthogonal paths where their endpoints and obstacles require it.
 
 Persistence check passed: after removing an arrow, localStorage recorded 6 edges, and Reset restored the clean 7-arrow demo. The subsequent browser console review showed no new runtime error output.
+
+Branch-stage verification: Add Joiner mode entered from the toolbar and a single tap on an empty canvas placed one fixed-size, unlabeled 3D joiner; the mode exited after placement and the route header count increased from 8 to 9 nodes. After Reset, Add Joiner mode was re-entered and a precise tap on the centered vertical arrow successfully produced an “Arrow split” confirmation. The attached joiner rendered as a small shaded circle with a bright ring, and the reducer created two directed segments in place of the original arrow; the toast stated that the joiner moves with both route segments.
+
+Browser harness note: the browser reports an inner viewport of 1280×1100 while the annotated screenshot is scaled to approximately 891×768. Coordinate tests must use the reported inner viewport dimensions, otherwise a tap intended for an arrow can land on empty canvas and create a free joiner. This is a test-harness coordinate issue, not evidence of an application placement failure.
+
+Joiner selection test passed: a synthetic touch long-press on the attached joiner opened `Joiner Actions` rather than the underlying arrow. The panel exposes `Edit Color` and `Remove Joiner` and does not expose a label editor, matching the branch contract.
+
+Joiner deletion test passed: activating `Remove Joiner` reduced the Tree 1 node count from 9 back to 8 and restored the original direct route through the removed joiner. Undo restored the attached joiner and its split segments, confirming joiner deletion is one reversible history step.
+
+Attached-joiner movement test passed: a pointer drag moved the joiner from approximately `(641, 478)` to `(697, 533)` in the browser viewport, and both split route segments remained attached. The persisted roadmap state contains the joiner with `kind: "joiner"`, `color: "white"`, and exactly two directed edges through it, confirming localStorage persistence of the joiner structure and movement.
+
+## Branch-stage final review — 2026-08-13
+
+- The approved branch stage compiled successfully with `pnpm check` and `pnpm build` after the final UI pass.
+- The build emitted only the existing pnpm configuration warning and the existing large-chunk warning; no TypeScript or production-build failure occurred.
+- The trusted visual review confirmed the Obsidian Cartography direction and requested stronger map-sheet archive rhythm, recurring route glyphs, and a clearer full-bleed editor status rail.
+- Those suggestions were applied in one cohesive pass to `Home.tsx` and `TreeView.tsx`: the roadmap archive now uses an asymmetrical sheet offset, plotted corner annotations, a recurring route glyph label, and the editor has a compact map-sheet status rail.
+- The editor’s branch behavior remains unchanged by the visual pass. Joiner creation, arrow splitting, joiner-first selection, removal/Undo, attached movement, persistence, and reverse-lane geometry were verified before the style pass.
+- The style-review registry is stored in `context/ui-registry.md`; non-blocking tokenization findings are stored in `context/IMPRINT_BRANCH_REVIEW.md` and were intentionally not auto-fixed.
+- Fresh editor-route verification after the visual pass loaded `/#/tree/1` with the full-bleed canvas, Back control, Add node, Add joiner, Connect nodes, Undo, Redo, Reset, zoom controls, map-sheet status rail, and live canvas footer visible.
+- The final browser console review returned no console output, so no new runtime error was observed after the visual changes.

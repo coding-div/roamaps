@@ -19,6 +19,8 @@ interface ActionPanelProps {
 export default function ActionPanel({ x, y, target, tree, dispatch, onClose }: ActionPanelProps) {
   const [mode, setMode] = useState<"menu" | "editColor" | "editName">("menu");
   const panelRef = useRef<HTMLDivElement>(null);
+  const selectedNode = target.type === "node" ? tree.nodeMap[target.nodeId] : undefined;
+  const isJoiner = selectedNode?.kind === "joiner";
   const adjustedX = x + 240 > window.innerWidth ? x - 250 : x + 20;
   const adjustedY = y + 260 > window.innerHeight ? y - 270 : y + 20;
 
@@ -46,12 +48,12 @@ export default function ActionPanel({ x, y, target, tree, dispatch, onClose }: A
   }
 
   return <div ref={panelRef} className="fixed z-50" style={{ left: adjustedX, top: adjustedY }} onClick={(e) => e.stopPropagation()}>
-    <div className="bg-[#13131a] border border-[#2a2a35] rounded-lg shadow-2xl shadow-black/50 overflow-hidden" style={{ minWidth: 210 }}>
-      <div className="flex items-center justify-between px-3 py-2 border-b border-[#2a2a35]"><p className="text-[#8a8a95] text-[11px] font-medium font-sans uppercase tracking-widest">{mode === "menu" ? `${target.type === "node" ? "Node" : "Arrow"} Actions` : mode === "editColor" ? "Pick Color" : "Edit Label"}</p><button onClick={onClose} className="w-5 h-5 flex items-center justify-center text-[#8a8a95] hover:text-[#e4e4e7]"><X className="w-3.5 h-3.5" /></button></div>
+      <div className="bg-[#13131a] border border-[#2a2a35] rounded-lg shadow-2xl shadow-black/50 overflow-hidden" style={{ minWidth: 210 }}>
+      <div className="flex items-center justify-between px-3 py-2 border-b border-[#2a2a35]"><p className="text-[#8a8a95] text-[11px] font-medium font-sans uppercase tracking-widest">{mode === "menu" ? `${target.type === "node" ? (isJoiner ? "Joiner" : "Node") : "Arrow"} Actions` : mode === "editColor" ? "Pick Color" : "Edit Label"}</p><button onClick={onClose} className="w-5 h-5 flex items-center justify-center text-[#8a8a95] hover:text-[#e4e4e7]"><X className="w-3.5 h-3.5" /></button></div>
       {mode === "menu" && <div className="p-1.5">
         <MenuButton icon={<Palette className="w-4 h-4" />} label="Edit Color" onClick={() => setMode("editColor")} />
-        {target.type === "node" && <MenuButton icon={<Type className="w-4 h-4" />} label="Edit Label" onClick={() => setMode("editName")} />}
-        <MenuButton icon={<Trash2 className="w-4 h-4" />} label={`Remove ${target.type === "node" ? "Node" : "Arrow"}`} danger onClick={remove} />
+        {target.type === "node" && !isJoiner && <MenuButton icon={<Type className="w-4 h-4" />} label="Edit Label" onClick={() => setMode("editName")} />}
+        <MenuButton icon={<Trash2 className="w-4 h-4" />} label={`Remove ${target.type === "node" ? (isJoiner ? "Joiner" : "Node") : "Arrow"}`} danger onClick={remove} />
       </div>}
       {mode === "editColor" && <div className="p-3"><div className="flex flex-wrap gap-2.5 justify-center">{COLOR_ORDER.map((color) => <button key={color} className="w-8 h-8 rounded-full transition-transform hover:scale-110 active:scale-90 border border-transparent hover:border-white/40" style={{ backgroundColor: VIBGYOR_COLORS[color], boxShadow: `0 0 8px ${VIBGYOR_COLORS[color]}55` }} onClick={() => changeColor(color)} title={color} />)}</div><button onClick={() => setMode("menu")} className="mt-3 w-full text-[#8a8a95] text-xs text-center hover:text-[#e4e4e7]">← Back</button></div>}
       {mode === "editName" && target.type === "node" && <NameEditor node={tree.nodeMap[target.nodeId]} onSave={saveLabel} onCancel={() => setMode("menu")} />}

@@ -1,6 +1,7 @@
 /**
  * Roamaps style reminder — Obsidian Cartography: near-black graphite canvas,
- * route cobalt focus, IBM Plex Mono metadata, and quiet spatial hierarchy.
+ * route cobalt focus, IBM Plex Mono metadata, quiet spatial hierarchy, and
+ * asymmetrical map-sheet archive cards with recurring route glyphs.
  */
 
 import { useLocation } from "wouter";
@@ -12,7 +13,7 @@ import type { TreeMap } from "@/lib/treeData";
 function createNewTree(index: number): TreeMap {
   const id = `tree-${Date.now()}`;
   const rootId = `${id}-root`;
-  const root = { id: rootId, x: 0, y: 0, label: "New Roadmap", color: "blue" as const, children: [] };
+  const root = { id: rootId, x: 0, y: 0, label: "New Roadmap", color: "blue" as const, kind: "node" as const, children: [] };
   return {
     id,
     title: `New Roadmap ${index}`,
@@ -63,14 +64,14 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="mt-28 max-w-5xl lg:mt-40">
+        <section className="mt-28 max-w-6xl lg:mt-40">
           <div className="mb-5 flex items-end justify-between border-b border-[#1d2230] pb-3"><div><p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[#68708a]">01 / Your roadmaps</p><p className="mt-2 text-sm text-[#71798d]">Open a route or place a new pin.</p></div><button onClick={handleCreate} className="hidden items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-[#8195d8] transition-colors hover:text-white sm:flex">New roadmap <ArrowUpRight className="h-3.5 w-3.5" /></button></div>
-          <div className="grid max-w-4xl grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="grid max-w-5xl grid-cols-1 gap-5 md:grid-cols-[1.08fr_0.92fr]">
             {trees.map((tree, index) => (
-              <button key={tree.id} onClick={() => navigate(`/tree/${tree.id.replace("tree-", "")}`)} className="group relative overflow-hidden rounded-[4px] border border-[#222837] bg-[#10131b]/90 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-[#4c7dff]/55 hover:bg-[#131824] active:scale-[0.99]" style={{ opacity: visible ? 1 : 0, transform: visible ? undefined : "translateY(14px)", transitionDelay: `${180 + index * 70}ms` }}>
-                <div className="absolute inset-y-0 left-0 w-[3px] bg-[#4c7dff]/35 transition-colors group-hover:bg-[#4c7dff]" /><div className="absolute left-[-2px] top-7 h-1 w-1 bg-[#4c7dff]" /><div className="absolute right-4 top-3 font-mono text-[8px] tracking-[0.18em] text-[#3f4961]">X 0{index + 2} · Y 1{index + 4}</div>
+              <button key={tree.id} onClick={() => navigate(`/tree/${tree.id.replace("tree-", "")}`)} className={`group relative overflow-hidden rounded-[4px] border border-[#222837] bg-[#10131b]/90 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-[#4c7dff]/55 hover:bg-[#131824] active:scale-[0.99] ${index === 1 ? "md:translate-y-8" : ""}`} style={{ opacity: visible ? 1 : 0, transform: visible ? undefined : "translateY(14px)", transitionDelay: `${180 + index * 70}ms` }}>
+                <div className="absolute inset-y-0 left-0 w-[3px] bg-[#4c7dff]/35 transition-colors group-hover:bg-[#4c7dff]" /><div className="absolute left-[-2px] top-7 h-1 w-1 bg-[#4c7dff]" /><div className="absolute right-4 top-3 font-mono text-[8px] tracking-[0.18em] text-[#3f4961]">X 0{index + 2} · Y 1{index + 4}</div><div className="pointer-events-none absolute right-[-16px] top-10 h-20 w-20 rounded-l-full border border-[#4c7dff]/10" /><div className="pointer-events-none absolute right-[-4px] top-[4.5rem] h-px w-16 bg-[#4c7dff]/20" />
                 <div className="relative h-32 overflow-hidden border-b border-[#1d2230] bg-[#0c0f16]"><img src={index % 2 === 0 ? "/manus-storage/roamaps-tree-preview-a_c0166a80.png" : "/manus-storage/roamaps-tree-preview-b_1ff7c59e.png"} alt="" className="h-full w-full object-cover opacity-80 transition-transform duration-500 group-hover:scale-[1.04]" /><div className="absolute inset-0 bg-gradient-to-t from-[#10131b] via-transparent to-transparent" /><span className="absolute bottom-3 left-4 font-mono text-[8px] uppercase tracking-[0.22em] text-[#7581a0]">Plotted route / {String(index + 1).padStart(2, "0")}</span></div>
-                <div className="relative p-5"><div className="mb-5 flex items-center justify-between"><span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#5c6680]">Map {String(index + 1).padStart(2, "0")} / archive</span><GitBranch className="h-4 w-4 text-[#4c7dff]/70" strokeWidth={1.4} /></div><h2 className="font-['Space_Grotesk',sans-serif] text-xl font-medium tracking-[-0.03em] text-[#e9ecf5]">{tree.title}</h2><p className="mt-1.5 text-sm text-[#737b8e]">{tree.description}</p><div className="mt-6 flex items-center gap-4 font-mono text-[10px] uppercase tracking-[0.13em] text-[#565f75]"><span>{Object.keys(tree.nodeMap).length} nodes</span><span>{tree.maxDepth} levels</span><span className="ml-auto text-[#7888bd] transition-transform group-hover:translate-x-1">Open →</span></div></div>
+                <div className="relative p-5"><div className="mb-5 flex items-center justify-between"><span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#5c6680]">Map {String(index + 1).padStart(2, "0")} / archive</span><span className="flex items-center gap-2"><span className="font-mono text-[8px] uppercase tracking-[0.16em] text-[#3f4961]">route glyph</span><GitBranch className="h-4 w-4 text-[#4c7dff]/80" strokeWidth={1.4} /></span></div><h2 className="font-['Space_Grotesk',sans-serif] text-xl font-medium tracking-[-0.03em] text-[#e9ecf5]">{tree.title}</h2><p className="mt-1.5 text-sm text-[#737b8e]">{tree.description}</p><div className="mt-6 flex items-center gap-4 font-mono text-[10px] uppercase tracking-[0.13em] text-[#565f75]"><span>{Object.keys(tree.nodeMap).length} nodes</span><span>{tree.maxDepth} levels</span><span className="ml-auto text-[#7888bd] transition-transform group-hover:translate-x-1">Open →</span></div></div>
               </button>
             ))}
           </div>

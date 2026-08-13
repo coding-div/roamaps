@@ -18,11 +18,14 @@ const MAX_HISTORY = 60;
 export type RoadmapAction =
   | { type: "ADD_TREE"; tree: TreeMap }
   | { type: "ADD_NODE"; treeId: string; node: NodeData }
+  | { type: "ADD_JOINER"; treeId: string; node: NodeData }
   | { type: "REMOVE_NODE"; treeId: string; nodeId: string }
   | { type: "MOVE_NODE"; treeId: string; nodeId: string; x: number; y: number }
   | { type: "UPDATE_LABEL"; treeId: string; nodeId: string; label: string }
   | { type: "UPDATE_NODE_COLOR"; treeId: string; nodeId: string; color: NodeColor }
   | { type: "ADD_ARROW"; treeId: string; sourceId: string; targetId: string; color: NodeColor }
+  | { type: "SPLIT_ARROW"; treeId: string; sourceId: string; targetId: string; joinerId: string }
+  | { type: "PLACE_JOINER_ON_ARROW"; treeId: string; sourceId: string; targetId: string; node: NodeData }
   | { type: "REMOVE_ARROW"; treeId: string; sourceId: string; targetId: string }
   | { type: "UPDATE_ARROW_COLOR"; treeId: string; sourceId: string; targetId: string; color: NodeColor }
   | { type: "UNDO" }
@@ -104,13 +107,33 @@ function applyContentAction(trees: TreeMap[], action: TreeContentAction): TreeMa
     switch (action.type) {
       case "ADD_NODE":
         if (nodeMap[action.node.id]) return tree;
-        nodeMap[action.node.id] = { ...action.node, children: [] };
+        nodeMap[action.node.id] = { ...action.node, kind: "node", children: [] };
+        return { ...tree, nodeMap };
+      case "ADD_JOINER":
+        if (nodeMap[action.node.id]) return tree;
+        nodeMap[action.node.id] = { ...action.node, kind: "joiner", label: "", children: [] };
         return { ...tree, nodeMap };
       case "REMOVE_NODE": {
-        if (!nodeMap[action.nodeId]) return tree;
+        const removed = nodeMap[action.nodeId];
+        if (!removed) return tree;
+        const incoming = Object.values(nodeMap).flatMap((source) => source.children
+          .filter((child) => child.targetId === action.nodeId)
+          .map((child) => ({ sourceId: source.id, color: child.color })));
+        const outgoing = removed.children.map((child) => ({ ...child }));
         delete nodeMap[action.nodeId];
-        for (const node of Object.values(nodeMap)) {
-          node.children = node.children.filter((child) => child.targetId !== action.nodeId);
+        for (const source of Object.values(nodeMap)) {
+          source.children = source.children.filter((child) => child.targetId !== action.nodeId);
+        }
+        if (incoming.length > 0 && outgoing.length > 0) {
+          const bypassColor = incoming.length === 1 ? incoming[0].color : "white";
+          for (const entry of incoming) {
+            const source = nodeMap[entry.sourceId];
+            if (!source) continue;
+            for (const child of outgoing) {
+              if (child.targetId === entry.sourceId || source.children.some((existing) => existing.targetId === child.targetId)) continue;
+              source.children.push({ targetId: child.targetId, color: bypassColor });
+            }
+          }
         }
         const removedRoot = tree.root?.id === action.nodeId;
         return {
@@ -143,6 +166,32 @@ function applyContentAction(trees: TreeMap[], action: TreeContentAction): TreeMa
         if (!source || !nodeMap[action.targetId] || action.sourceId === action.targetId) return tree;
         if (source.children.some((child) => child.targetId === action.targetId)) return tree;
         source.children = [...source.children, { targetId: action.targetId, color: action.color }];
+        return syncRoot(tree, nodeMap);
+      }
+      case "SPLIT_ARROW": {
+        const source = nodeMap[action.sourceId];
+        const target = nodeMap[action.targetId];
+        const joiner = nodeMap[action.joinerId];
+        if (!source || !target || !joiner || action.sourceId === action.targetId || action.sourceId === action.joinerId || action.targetId === action.joinerId) return tree;
+        const original = source.children.find((child) => child.targetId === action.targetId);
+        if (!original || source.children.some((child) => child.targetId === action.joinerId) || joiner.children.some((child) => child.targetId === action.targetId)) return tree;
+        source.children = source.children.map((child) => child.targetId === action.targetId
+          ? { ...child, targetId: action.joinerId, splitJoinerId: action.joinerId }
+          : child);
+        joiner.children = [...joiner.children, { targetId: action.targetId, color: original.color, splitJoinerId: action.joinerId }];
+        return syncRoot(tree, nodeMap);
+      }
+      case "PLACE_JOINER_ON_ARROW": {
+        const source = nodeMap[action.sourceId];
+        const target = nodeMap[action.targetId];
+        if (!source || !target || nodeMap[action.node.id] || action.sourceId === action.targetId || action.sourceId === action.node.id || action.targetId === action.node.id) return tree;
+        const original = source.children.find((child) => child.targetId === action.targetId);
+        if (!original) return tree;
+        nodeMap[action.node.id] = { ...action.node, kind: "joiner", label: "", children: [] };
+        source.children = source.children.map((child) => child.targetId === action.targetId
+          ? { ...child, targetId: action.node.id, splitJoinerId: action.node.id }
+          : child);
+        nodeMap[action.node.id].children = [{ targetId: action.targetId, color: original.color, splitJoinerId: action.node.id }];
         return syncRoot(tree, nodeMap);
       }
       case "REMOVE_ARROW": {
@@ -215,7 +264,17 @@ function loadInitialState(): HistoryState {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       const parsed = JSON.parse(saved) as TreeMap[];
-      if (Array.isArray(parsed)) return { present: parsed, past: [], future: [] };
+      if (Array.isArray(parsed)) {
+        const normalized = parsed.map((tree) => ({
+          ...tree,
+          nodeMap: Object.fromEntries(Object.entries(tree.nodeMap ?? {}).map(([id, node]) => [id, {
+            ...node,
+            kind: node.kind ?? "node",
+            children: (node.children ?? []).map((child) => ({ ...child })),
+          }])),
+        }));
+        return { present: normalized, past: [], future: [] };
+      }
     }
   } catch {
     // Fall back to the built-in demo trees if storage is unavailable or corrupt.

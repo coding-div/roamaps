@@ -26,6 +26,16 @@ The approved recovery changes are implemented in the live WebDev project. Arrow 
 
 Verification passed in the live browser: arrow long-press opened the action panel after 3px synthetic touch drift; Remove Arrow reduced Tree 1 from 7 to 6 edges; Undo restored 7; Redo returned to 6; a final Undo restored 7; localStorage recorded the 6-edge state before Reset; Reset restored the clean 7-edge demo; five aligned demo routes render as one segment; and no new browser-console errors appeared. The live project’s TypeScript check and production build also pass.
 
+## Branch-stage decisions — confirmed
+
+The user confirmed that every object is simply a node; there is no special center/root node. Node removal uses bypass reconnection only when the node has both incoming and outgoing arrows: every incoming source connects to every outgoing target, duplicate directed arrows are skipped, then the removed node and its old arrows disappear. If a node has only incoming or only outgoing arrows, its connected arrows are removed with it. Removing an arrow still removes only that arrow and leaves both endpoint nodes.
+
+The existing A/B two-node connection method must not change. The new branch workflow adds a persistent, visible, selectable, movable joiner that is node-like but smaller and unlabeled. A joiner may be placed on an existing arrow, does not count as a routing obstacle, and remains after branch construction so the result stays editable and visually distinctive. Placing one on an arrow splits that arrow into source → joiner → target. Cycles are allowed. Same-direction duplicate arrows are blocked. Reverse-direction arrows are separate objects and must render on separate parallel lanes rather than overlap.
+
+## Branch-stage risks and safeguards
+
+The implementation must use stable node/joiner IDs, preserve one-step Undo/Redo transactions for each structural operation, skip duplicate links during many-to-many bypass deletion, keep joiners out of obstacle routing, use larger invisible touch targets for small joiners, and validate all affected routes after moving or deleting a joiner. These decisions are recorded before code changes so the next session does not infer behavior from screenshots.
+
 ## Delivery
 
 The user wants a clickable live website trial, not a PDF overview. Live preview URL:
@@ -37,3 +47,13 @@ The preview is currently not a public published link; the user controls the Publ
 ## Workflow next steps
 
 Run the review report without auto-fixing any new findings. Then commit the synchronized source changes to `coding-div/roamaps`, save a WebDev checkpoint for `roamaps-live`, and deliver the live preview plus concise review notes. Any review fixes must wait for the user’s approval.
+
+## Branch-stage implementation completed — 2026-08-13
+
+The approved branch contract is implemented in `/home/ubuntu/roamaps-live`. The data model now distinguishes normal nodes and persistent smaller unlabeled joiners, stores split-arrow metadata, adds theme-safe black and white palette values, and preserves old saved roadmaps through normalization. The reducer supports one-step joiner placement, arrow splitting, joiner movement, all-to-all bypass deletion, duplicate directed-edge prevention, allowed multi-node cycles, blocked self-loops, and existing Undo/Redo/Reset behavior.
+
+The canvas now has an Add Joiner toolbar mode that toggles off when pressed again, places one joiner per activation on empty canvas or a clear arrow segment, rejects normal-node/crossing/short-segment placement, keeps joiners out of routing obstacles, gives joiners selection priority, renders attached tails without arrowheads, and keeps split segments attached while a joiner moves like a node. Reverse arrows use distinct parallel lanes. Home previews intentionally omit joiners; editor statistics include them.
+
+The branch browser trial passed TypeScript checking, production build, Add Joiner placement, arrow splitting, joiner-first selection, joiner removal with Undo, attached-joiner dragging, persistence, clean reload, and a clean final browser console. The final imprint pass applied the trusted archive/card/editor status-rail recommendations; remaining non-blocking tokenization notes are in `context/IMPRINT_BRANCH_REVIEW.md`. The review report is `/home/ubuntu/roamaps-live/BRANCH_REVIEW_REPORT.md`, and the numbered tablet tasks are `/home/ubuntu/roamaps-live/USER_TRIAL_TASKS.md`.
+
+No user-tablet findings have been reported yet for this branch stage. The next recovery/improvement pass must start from the numbered trial-task result rather than assumptions.

@@ -48,7 +48,7 @@ These are the requirements confirmed by the user as of the latest checkpoint (v4
 | 28 | Min box width: 100px, Min box height: 36px | IMPLEMENTED |
 | 29 | Empty boxes have minimum dimensions | IMPLEMENTED |
 | 30 | Box colors from VIBGYOR palette (7 colors) | IMPLEMENTED |
-| 31 | Root node (Main Topic) is slightly larger and labeled | IMPLEMENTED |
+| 31 | The initial Main Topic is a demo starting node; no node has special root-only behavior | ACTIVE — visual treatment to be reconciled in branch stage |
 
 ### Arrow/Edge Requirements
 
@@ -63,9 +63,9 @@ These are the requirements confirmed by the user as of the latest checkpoint (v4
 
 | # | Requirement | Status |
 |---|-------------|--------|
-| 36 | Remove Node: deletes the node AND its incoming arrow; children reconnect to parent (chain reconnection: A→B→C becomes A→C) | IMPLEMENTED (with bug — see KNOWN_ISSUES.md) |
+| 36 | Remove Node: when both incoming and outgoing arrows exist, reconnect every incoming source to every outgoing target before removing the node; otherwise remove the connected arrows | ACTIVE — branch-stage implementation |
 | 37 | Remove Arrow: removes only the arrow; both boxes remain as independent nodes | IMPLEMENTED |
-| 38 | Cannot remove the root node | IMPLEMENTED |
+| 38 | Every node, including the first/demo node, can be removed | ACTIVE — no special center/root deletion rule |
 
 ## Obsolete / Replaced Requirements
 
@@ -89,3 +89,9 @@ The following were discussed but later corrected or superseded:
 - Dark mode only — no light theme option
 - Static frontend only (no backend in current architecture)
 - All tree data is currently hardcoded in the source code
+
+## Branch-stage decisions (confirmed)
+
+The existing A/B two-node connection method remains unchanged and continues to be available. A new branch workflow will add a movable, persistent joiner: a small visible, selectable, unlabeled node-like object. A joiner can be placed on an existing arrow, is not treated as a routing obstacle, and can receive or emit multiple arrows. After placement, the joiner remains as an editable object rather than collapsing into plain arrow geometry.
+
+The branch graph is allowed to contain cycles. Duplicate arrows in the same direction between the same source and target are blocked. Reverse-direction arrows are allowed as separate objects and must use distinct parallel lanes rather than overlap. A joiner placed on an existing arrow will split that arrow into source → joiner → target. Removing a node or joiner uses the same bypass rule: with incoming and outgoing arrows, create every incoming-source to outgoing-target connection, skip duplicates, then remove the object; with only one side of connections, remove those connected arrows.

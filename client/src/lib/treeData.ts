@@ -14,7 +14,11 @@ export type NodeColor =
   | "green"
   | "yellow"
   | "orange"
-  | "red";
+  | "red"
+  | "black"
+  | "white";
+
+export type NodeKind = "node" | "joiner";
 
 export const VIBGYOR_COLORS: Record<NodeColor, string> = {
   violet: "#8B5CF6",
@@ -24,9 +28,11 @@ export const VIBGYOR_COLORS: Record<NodeColor, string> = {
   yellow: "#EAB308",
   orange: "#F97316",
   red: "#EF4444",
+  black: "#293747",
+  white: "#E8F0F6",
 };
 
-export const COLOR_ORDER: NodeColor[] = ["violet", "indigo", "blue", "green", "yellow", "orange", "red"];
+export const COLOR_ORDER: NodeColor[] = ["violet", "indigo", "blue", "green", "yellow", "orange", "red", "black", "white"];
 
 export const MAX_LABEL_LENGTH = 50;
 
@@ -38,6 +44,8 @@ export interface NodeData {
   y: number;
   label: string;
   color: NodeColor;
+  /** Optional for backwards compatibility with older localStorage snapshots. */
+  kind?: NodeKind;
   children: ChildRef[];
 }
 
@@ -45,6 +53,8 @@ export interface ChildRef {
   targetId: string;
   /** Independent color for this specific arrow/edge */
   color: NodeColor;
+  /** Set on the two segments created by splitting an arrow with a joiner. */
+  splitJoinerId?: string;
 }
 
 export interface TreeMap {
