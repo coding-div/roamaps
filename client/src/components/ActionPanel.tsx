@@ -85,17 +85,44 @@ export default function ActionPanel({
     if (target.type !== "node") return;
     const nodeId = target.nodeId;
 
-    // Find the parent node that has this node as a child and remove the reference
+    // Don't allow removing the root node
+    if (nodeId === tree.root.id) return;
+
+    // Find the parent node that has this node as a child
+    let parent: NodeData | null = null;
+    let childIndex = -1;
     for (const node of Object.values(tree.nodeMap)) {
       const idx = node.children.findIndex((c) => c.targetId === nodeId);
       if (idx !== -1) {
-        // Remove this child reference from parent — also removes all arrows to its children
-        node.children.splice(idx, 1);
-        onTreeChange();
-        onClose();
-        return;
+        parent = node;
+        childIndex = idx;
+        break;
       }
     }
+
+    if (!parent) return; // No parent found (orphan or root)
+
+    // Get the node being removed
+    const nodeToRemove = tree.nodeMap[nodeId];
+    if (!nodeToRemove) return;
+
+    // Reconnect: parent's children should now include the removed node's children
+    // with the same arrow colors from parent to each grandchild
+    const grandchildren = nodeToRemove.children;
+    
+    // Remove this node from parent's children list
+    parent.children.splice(childIndex, 1);
+
+    // Add all grandchildren to parent with their original arrow colors
+    for (const gc of grandchildren) {
+      parent.children.push({ targetId: gc.targetId, color: gc.color });
+    }
+
+    // Remove the node from the nodeMap entirely
+    delete tree.nodeMap[nodeId];
+
+    onTreeChange();
+    onClose();
   }
 
   // ─── ARROW ACTIONS ───

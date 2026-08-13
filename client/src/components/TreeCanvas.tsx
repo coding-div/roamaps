@@ -1,9 +1,9 @@
 /**
  * TreeCanvas — Full-screen SVG canvas for rendering tree branches
- * Features: pinch-to-zoom + pan, scroll-wheel zoom, visible +/- zoom buttons
- *           long-press action panel on nodes AND arrows
- *           auto-resizing boxes with 50-char limit and text wrapping
- *           independent arrow colors
+ * Fixes applied:
+ * - Arrows now exit/enter nodes perpendicular to the surface
+ * - Crossing arrows show a bridge/gap to distinguish them
+ * - Remove node deletes the node + reconnects parent to children
  * Design: Obsidian Canvas aesthetic — dark background, dot grid, crisp lines
  */
 
@@ -32,7 +32,7 @@ const MIN_BOX_H = 36;
 const MAX_BOX_W = 280;
 const MAX_BOX_H = 120;
 const FONT_SIZE = 12;
-const CHAR_WIDTH = 7.2; // approximate width of one character
+const CHAR_WIDTH = 7.2;
 const LINE_HEIGHT = 18;
 const ROOT_FONT_SIZE = 14;
 
@@ -81,18 +81,99 @@ function DotGrid() {
   );
 }
 
-function getOrthogonalPath(x1: number, y1: number, x2: number, y2: number): string {
-  const midX = (x1 + x2) / 2;
-  const midY = (y1 + y2) / 2;
-  if (Math.abs(x1 - x2) > Math.abs(y1 - y2)) {
-    return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
+/**
+ * Get the exit/entry point on a box edge given a direction.
+ * Returns the point on the surface and the direction of travel perpendicular to the surface.
+ */
+function getEdgePoint(
+  cx: number,
+  cy: number,
+  w: number,
+  h: number,
+  direction: "up" | "down" | "left" | "right"
+): { x: number; y: number; dx: number; dy: number } {
+  switch (direction) {
+    case "up":
+      return { x: cx, y: cy - h / 2, dx: 0, dy: -1 };
+    case "down":
+      return { x: cx, y: cy + h / 2, dx: 0, dy: 1 };
+    case "left":
+      return { x: cx - w / 2, y: cy, dx: -1, dy: 0 };
+    case "right":
+      return { x: cx + w / 2, y: cy, dx: 1, dy: 0 };
   }
-  return `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
+}
+
+/**
+ * Determine which side of a box a point is on relative to the box center.
+ * Returns the direction perpendicular to the side that the point faces.
+ */
+function getDirectionFromCenter(
+  fromCx: number,
+  fromCy: number,
+  toX: number,
+  toY: number
+): "up" | "down" | "left" | "right" {
+  const dx = toX - fromCx;
+  const dy = toY - fromCy;
+  if (Math.abs(dx) > Math.abs(dy)) {
+    return dx > 0 ? "right" : "left";
+  }
+  return dy > 0 ? "down" : "up";
+}
+
+/**
+ * Build an orthogonal path that:
+ * 1. Exits the source box perpendicular to its surface
+ * 2. Enters the target box perpendicular to its surface
+ * 3. Uses right-angle turns
+ */
+function getOrthogonalPath(
+  srcCx: number,
+  srcCy: number,
+  srcW: number,
+  srcH: number,
+  tgtCx: number,
+  tgtCy: number,
+  tgtW: number,
+  tgtH: number
+): string {
+  // Determine exit direction from source
+  const exitDir = getDirectionFromCenter(srcCx, srcCy, tgtCx, tgtCy);
+  const entryDir = getDirectionFromCenter(tgtCx, tgtCy, srcCx, srcCy);
+
+  const exitPt = getEdgePoint(srcCx, srcCy, srcW, srcH, exitDir);
+  const entryPt = getEdgePoint(tgtCx, tgtCy, tgtW, tgtH, entryDir);
+
+  // Build the orthogonal path with right-angle turns
+  // The path must start perpendicular to exit side and end perpendicular to entry side
+
+  if (exitDir === entryDir) {
+    // Same direction — simple straight path with one bend
+    if (exitDir === "up" || exitDir === "down") {
+      const midX = (exitPt.x + entryPt.x) / 2;
+      return `M ${exitPt.x} ${exitPt.y} L ${midX} ${exitPt.y} L ${midX} ${entryPt.y} L ${entryPt.x} ${entryPt.y}`;
+    }
+    const midY = (exitPt.y + entryPt.y) / 2;
+    return `M ${exitPt.x} ${exitPt.y} L ${exitPt.x} ${midY} L ${entryPt.x} ${midY} L ${entryPt.x} ${entryPt.y}`;
+  }
+
+  // Different directions — two bends
+  if ((exitDir === "up" || exitDir === "down") && (entryDir === "left" || entryDir === "right")) {
+    // Exit vertical, enter horizontal
+    const midX = entryPt.x;
+    const midY = exitPt.y;
+    return `M ${exitPt.x} ${exitPt.y} L ${midX} ${midY} L ${entryPt.x} ${entryPt.y}`;
+  }
+
+  // Exit horizontal, enter vertical
+  const midX = exitPt.x;
+  const midY = entryPt.y;
+  return `M ${exitPt.x} ${exitPt.y} L ${midX} ${midY} L ${entryPt.x} ${entryPt.y}`;
 }
 
 /**
  * Calculate box dimensions based on label content.
- * Auto-resizes to fit text, wraps at max width, caps at max height.
  */
 function getBoxDimensions(label: string, isRoot: boolean): { w: number; h: number } {
   const fs = isRoot ? ROOT_FONT_SIZE : FONT_SIZE;
@@ -105,19 +186,15 @@ function getBoxDimensions(label: string, isRoot: boolean): { w: number; h: numbe
     };
   }
 
-  // Calculate how many characters fit per line
   const charsPerLine = Math.max(5, Math.floor(MAX_BOX_W / cw));
-
-  // Split into lines based on newlines in label and word wrapping
   const rawLines = label.split("\n");
   const wrappedLines: string[] = [];
 
   for (const rawLine of rawLines) {
     if (rawLine.length === 0) {
-      wrappedLines.push(""); // empty line still adds height
+      wrappedLines.push("");
       continue;
     }
-    // Break line into chunks that fit per line
     let remaining = rawLine;
     while (remaining.length > 0) {
       const chunk = remaining.slice(0, charsPerLine);
@@ -131,7 +208,7 @@ function getBoxDimensions(label: string, isRoot: boolean): { w: number; h: numbe
 
   const w = Math.min(
     MAX_BOX_W,
-    Math.max(isRoot ? 160 : MIN_BOX_W, longestLine * cw + 20) // +20 for padding
+    Math.max(isRoot ? 160 : MIN_BOX_W, longestLine * cw + 20)
   );
   const h = Math.min(
     MAX_BOX_H,
@@ -141,11 +218,56 @@ function getBoxDimensions(label: string, isRoot: boolean): { w: number; h: numbe
   return { w, h };
 }
 
+/**
+ * Detect intersections between two orthogonal path segments.
+ * Returns true if the paths cross (not just touch).
+ */
+function pathsIntersect(
+  path1: Array<{ x: number; y: number }>,
+  path2: Array<{ x: number; y: number }>
+): Array<{ x: number; y: number }> {
+  const intersections: Array<{ x: number; y: number }> = [];
+
+  for (let i = 0; i < path1.length - 1; i++) {
+    const a1 = path1[i];
+    const a2 = path1[i + 1];
+    for (let j = 0; j < path2.length - 1; j++) {
+      const b1 = path2[j];
+      const b2 = path2[j + 1];
+
+      // Check if segment a1-a2 intersects segment b1-b2
+      const isH1 = a1.y === a2.y;
+      const isH2 = b1.y === b2.y;
+
+      if (isH1 && !isH2) {
+        // a is horizontal, b is vertical
+        const minX = Math.min(a1.x, a2.x);
+        const maxX = Math.max(a1.x, a2.x);
+        const minY = Math.min(b1.y, b2.y);
+        const maxY = Math.max(b1.y, b2.y);
+        if (b1.x >= minX && b1.x <= maxX && a1.y >= minY && a1.y <= maxY) {
+          intersections.push({ x: b1.x, y: a1.y });
+        }
+      } else if (!isH1 && isH2) {
+        // a is vertical, b is horizontal
+        const minX = Math.min(b1.x, b2.x);
+        const maxX = Math.max(b1.x, b2.x);
+        const minY = Math.min(a1.y, a2.y);
+        const maxY = Math.max(a1.y, a2.y);
+        if (a1.x >= minX && a1.x <= maxX && b1.y >= minY && b1.y <= maxY) {
+          intersections.push({ x: a1.x, y: b1.y });
+        }
+      }
+    }
+  }
+
+  return intersections;
+}
+
 export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Force re-render key — incremented when tree data mutates
   const [renderKey, setRenderKey] = useState(0);
 
   const [viewBox, setViewBox] = useState<ViewBox>(() => {
@@ -158,17 +280,14 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const [isPanning, setIsPanning] = useState(false);
   const panStart = useRef({ x: 0, y: 0 });
 
-  // Touch pinch-to-zoom state
   const initialPinchDistance = useRef<number | null>(null);
   const initialViewBoxOnPinch = useRef<ViewBox | null>(null);
   const pinchCenter = useRef({ x: 0, y: 0 });
   const isPinching = useRef(false);
 
-  // Action panel state
   const [actionPanelTarget, setActionPanelTarget] = useState<PanelTarget | null>(null);
   const [actionPanelScreenPos, setActionPanelScreenPos] = useState({ x: 0, y: 0 });
 
-  // Long press detection
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressThreshold = 500;
   const isLongPressActive = useRef(false);
@@ -193,7 +312,6 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const handleZoomIn = useCallback(() => zoomByFactor(0.8), [zoomByFactor]);
   const handleZoomOut = useCallback(() => zoomByFactor(1.25), [zoomByFactor]);
 
-  // ─── RESET VIEW ───
   const handleResetView = useCallback(() => {
     if (tree.maxDepth <= 3) {
       setViewBox({ x: -500, y: -700, w: 1000, h: 1400 });
@@ -202,7 +320,6 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     }
   }, [tree.maxDepth]);
 
-  // ─── SCROLL WHEEL ZOOM ───
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
       e.preventDefault();
@@ -230,10 +347,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
         isPinching.current = true;
         const t1 = e.touches[0];
         const t2 = e.touches[1];
-        const dist = Math.hypot(
-          t2.clientX - t1.clientX,
-          t2.clientY - t1.clientY
-        );
+        const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
         initialPinchDistance.current = dist;
         initialViewBoxOnPinch.current = { ...viewBox };
         pinchCenter.current = {
@@ -248,13 +362,12 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       } else if (e.touches.length === 1) {
         const touch = e.touches[0];
         const el = document.elementFromPoint(touch.clientX, touch.clientY);
-        // Check if on a node or arrow
         if (
           el &&
           ((el as Element).closest("[data-node-id]") ||
             (el as Element).closest("[data-arrow-id]"))
         ) {
-          return; // let node/arrow handler deal with it
+          return;
         }
         setIsPanning(true);
         panStart.current = { x: touch.clientX, y: touch.clientY };
@@ -269,18 +382,11 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       if (!svg) return;
       const rect = svg.getBoundingClientRect();
 
-      if (
-        e.touches.length === 2 &&
-        isPinching.current &&
-        initialPinchDistance.current !== null
-      ) {
+      if (e.touches.length === 2 && isPinching.current && initialPinchDistance.current !== null) {
         e.preventDefault();
         const t1 = e.touches[0];
         const t2 = e.touches[1];
-        const dist = Math.hypot(
-          t2.clientX - t1.clientX,
-          t2.clientY - t1.clientY
-        );
+        const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
         const scale = dist / initialPinchDistance.current;
         const ib = initialViewBoxOnPinch.current!;
         const newW = ib.w / scale;
@@ -294,15 +400,9 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
         });
       } else if (e.touches.length === 1 && isPanning) {
         const touch = e.touches[0];
-        const dx =
-          ((touch.clientX - panStart.current.x) / rect.width) * viewBox.w;
-        const dy =
-          ((touch.clientY - panStart.current.y) / rect.height) * viewBox.h;
-        setViewBox((prev) => ({
-          ...prev,
-          x: prev.x - dx,
-          y: prev.y - dy,
-        }));
+        const dx = ((touch.clientX - panStart.current.x) / rect.width) * viewBox.w;
+        const dy = ((touch.clientY - panStart.current.y) / rect.height) * viewBox.h;
+        setViewBox((prev) => ({ ...prev, x: prev.x - dx, y: prev.y - dy }));
         panStart.current = { x: touch.clientX, y: touch.clientY };
       }
     },
@@ -332,10 +432,8 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       const svg = svgRef.current;
       if (!svg) return;
       const rect = svg.getBoundingClientRect();
-      const dx =
-        ((e.clientX - panStart.current.x) / rect.width) * viewBox.w;
-      const dy =
-        ((e.clientY - panStart.current.y) / rect.height) * viewBox.h;
+      const dx = ((e.clientX - panStart.current.x) / rect.width) * viewBox.w;
+      const dy = ((e.clientY - panStart.current.y) / rect.height) * viewBox.h;
       setViewBox((prev) => ({ ...prev, x: prev.x - dx, y: prev.y - dy }));
       panStart.current = { x: e.clientX, y: e.clientY };
     },
@@ -344,7 +442,6 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
 
   const handleMouseUp = useCallback(() => setIsPanning(false), []);
 
-  // Prevent default touch gestures
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -393,38 +490,46 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   // ─── RENDER ───
   const edges = getEdgesFromTree(tree);
   const nodes = getNodesFromTree(tree);
-
-  // Key to force re-render on data mutation
   const renderId = `${tree.id}-${renderKey}`;
+
+  // Precompute all paths for crossing detection
+  const pathSegments: Array<Array<{ x: number; y: number }>> = [];
 
   function renderEdges(): ReactNode[] {
     return edges.map(({ source, target, arrowColor, sourceChildIndex }, i) => {
       const ss = getBoxDimensions(source.label, source.id === tree.root.id);
       const ts = getBoxDimensions(target.label, target.id === tree.root.id);
-      const dx = target.x - source.x;
-      const dy = target.y - source.y;
-      const sx = Math.sign(dx) || 1;
-      const sy = Math.sign(dy) || 1;
-      const startX = source.x + (ss.w / 2) * sx;
-      const startY = source.y + (ss.h / 2) * sy;
-      const endX = target.x - (ts.w / 2) * sx;
-      const endY = target.y - (ts.h / 2) * sy;
-      const isH = Math.abs(dx) > Math.abs(dy);
-
-      // Midpoint of the path for long-press target
-      const midX = isH ? (startX + endX) / 2 : startX;
-      const midY = isH ? startY : (startY + endY) / 2;
 
       const path = getOrthogonalPath(
-        isH ? startX : source.x,
-        isH ? source.y : startY,
-        isH ? endX : target.x,
-        isH ? target.y : endY
+        source.x, source.y, ss.w, ss.h,
+        target.x, target.y, ts.w, ts.h
       );
+
+      // Parse path into segments for crossing detection
+      const segs: Array<{ x: number; y: number }> = [];
+      const parts = path.replace("M ", "").split(" L ");
+      for (const part of parts) {
+        const [px, py] = part.split(" ").map(Number);
+        segs.push({ x: px, y: py });
+      }
+      pathSegments[i] = segs;
+
+      // Midpoint for long-press target
+      const midIdx = Math.floor(segs.length / 2);
+      const midX = segs[midIdx]?.x ?? source.x;
+      const midY = segs[midIdx]?.y ?? source.y;
+
+      // Find crossing points with other edges
+      const crossings: Array<{ x: number; y: number }> = [];
+      for (let j = 0; j < pathSegments.length; j++) {
+        if (j === i || !pathSegments[j]) continue;
+        const pts = pathsIntersect(segs, pathSegments[j]);
+        crossings.push(...pts);
+      }
 
       return (
         <g key={`edge-${renderId}-${i}`} data-arrow-id={`edge-${i}`}>
-          {/* Invisible wider hit area for easier touching */}
+          {/* Invisible wider hit area */}
           <path
             d={path}
             fill="none"
@@ -434,12 +539,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
             onTouchStart={(e) => {
               e.stopPropagation();
               const touch = e.touches[0];
-              startLongPress(
-                { type: "arrow", edgeIndex: i },
-                { x: midX, y: midY },
-                touch.clientX,
-                touch.clientY
-              );
+              startLongPress({ type: "arrow", edgeIndex: i }, { x: midX, y: midY }, touch.clientX, touch.clientY);
             }}
             onTouchMove={() => {
               if (longPressTimer.current) {
@@ -454,12 +554,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
             }}
             onMouseDown={(e) => {
               e.stopPropagation();
-              startLongPress(
-                { type: "arrow", edgeIndex: i },
-                { x: midX, y: midY },
-                e.clientX,
-                e.clientY
-              );
+              startLongPress({ type: "arrow", edgeIndex: i }, { x: midX, y: midY }, e.clientX, e.clientY);
             }}
             onMouseUp={endLongPress}
             onMouseLeave={endLongPress}
@@ -474,6 +569,19 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
             markerEnd="url(#arrowhead)"
             pointerEvents="none"
           />
+          {/* Bridge gaps at crossings */}
+          {crossings.map((c, ci) => (
+            <circle
+              key={`crossing-${renderId}-${i}-${ci}`}
+              cx={c.x}
+              cy={c.y}
+              r={4}
+              fill="#0a0a0f"
+              stroke="#0a0a0f"
+              strokeWidth={4}
+              pointerEvents="none"
+            />
+          ))}
         </g>
       );
     });
@@ -484,8 +592,6 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       const size = getBoxDimensions(node.label, node.id === tree.root.id);
       const color = VIBGYOR_COLORS[node.color];
       const isRoot = node.id === tree.root.id;
-
-      // Build text with line wrapping for SVG
       const textLines = buildTextLines(node.label, size.w, isRoot);
 
       return (
@@ -497,12 +603,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
           onTouchStart={(e) => {
             e.stopPropagation();
             const touch = e.touches[0];
-            startLongPress(
-              { type: "node", nodeId: node.id },
-              node,
-              touch.clientX,
-              touch.clientY
-            );
+            startLongPress({ type: "node", nodeId: node.id }, node, touch.clientX, touch.clientY);
           }}
           onTouchMove={() => {
             if (longPressTimer.current) {
@@ -517,12 +618,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
           }}
           onMouseDown={(e) => {
             e.stopPropagation();
-            startLongPress(
-              { type: "node", nodeId: node.id },
-              node,
-              e.clientX,
-              e.clientY
-            );
+            startLongPress({ type: "node", nodeId: node.id }, node, e.clientX, e.clientY);
           }}
           onMouseUp={endLongPress}
           onMouseLeave={endLongPress}
@@ -538,7 +634,6 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
             strokeWidth={isRoot ? 2 : 1.5}
             strokeOpacity={0.8}
           />
-          {/* Render text lines */}
           {textLines.length > 0 && (
             <g pointerEvents="none">
               {textLines.map((line, li) => (
@@ -607,10 +702,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
-        style={{
-          cursor: isPanning ? "grabbing" : "grab",
-          touchAction: "none",
-        }}
+        style={{ cursor: isPanning ? "grabbing" : "grab", touchAction: "none" }}
       >
         <DotGrid />
         {renderEdges()}
