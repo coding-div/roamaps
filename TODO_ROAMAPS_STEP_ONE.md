@@ -1,0 +1,20 @@
+- [x] Read the current Roamaps project overview, architecture, build plan, and relevant context.
+- [x] Inspect the current source structure without editing code.
+- [x] Identify the single highest-leverage product decision for the first MVP feature.
+- [x] Record the user’s clarified perpendicular-arrow, crossing, reset, undo/redo, movable-node, and two-node connection requirements.
+- [x] Ask one question and wait for the user’s answer about root removal.
+- [ ] Write and present the implementation contract before changing code.
+- [x] Implement only after the user approves the contract.
+- [ ] Run imprint, type-check, production build, and browser verification.
+- [ ] Report review findings by severity without auto-fixing them.
+- [ ] Save durable memory and create a WebDev checkpoint after the review handoff.
+- [x] Deliver the result as a clickable live trial website for tablet testing, never as a PDF overview.
+- [x] Recover and fix arrow removal so an existing arrow can be selected and deleted reliably.
+- [x] Improve route selection so direct horizontal or vertical perpendicular connections are preferred when clear, while retaining orthogonal obstacle-aware routing when needed.
+- [x] Record every reported issue, diagnosis, decision, fix, verification result, and user suggestion in durable project memory and the milestone checklist.
+- [x] Confirm whether changes are synchronized automatically to GitHub or require an explicit commit and push.
+- [x] Receive user approval for the saved recovery plan before changing code.
+- [x] Preserve small touch drift during arrow long-press while cancelling on meaningful movement or cancellation.
+- [x] Prefer clear direct horizontal or vertical routes before orthogonal fallback routing.
+- [x] Verify arrow removal, direct aligned routes, undo/redo, persistence, and clean reset in the live trial.
+- [ ] Synchronize the recovery changes to GitHub with an explicit commit and push, then save a new WebDev checkpoint.

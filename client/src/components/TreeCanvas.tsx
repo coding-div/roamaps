@@ -36,6 +36,7 @@ const ROUTE_CLEARANCE = 18;
 const OBSTACLE_PADDING = 10;
 const ARROW_LENGTH = 9;
 const ARROW_WIDTH = 5;
+const ARROW_PRESS_MOVE_THRESHOLD = 10;
 
 interface ViewBox { x: number; y: number; w: number; h: number }
 interface Point { x: number; y: number }
@@ -43,6 +44,7 @@ interface Segment { a: Point; b: Point }
 interface Box { x: number; y: number; w: number; h: number }
 interface Route { points: Point[]; path: string; targetDirection: Direction; midpoint: Point }
 interface DragState { nodeId: string; pointerId: number; startX: number; startY: number; moved: boolean; x: number; y: number }
+interface ArrowPressState { pointerId: number; startX: number; startY: number }
 type PanelTarget = { type: "node"; nodeId: string } | { type: "arrow"; sourceId: string; targetId: string };
 
 function DotGrid() {
@@ -135,9 +137,38 @@ function routeLength(points: Point[]): number {
   return points.slice(1).reduce((total, point, index) => total + Math.abs(point.x - points[index].x) + Math.abs(point.y - points[index].y), 0);
 }
 
+function routeFromPoints(points: Point[], targetDirection: Direction): Route {
+  const simplified = simplifyPoints(points);
+  const path = simplified.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
+  let midpoint = simplified[0];
+  let longest = -1;
+  for (let i = 0; i < simplified.length - 1; i++) {
+    const length = Math.abs(simplified[i + 1].x - simplified[i].x) + Math.abs(simplified[i + 1].y - simplified[i].y);
+    if (length > longest) {
+      longest = length;
+      midpoint = { x: (simplified[i].x + simplified[i + 1].x) / 2, y: (simplified[i].y + simplified[i + 1].y) / 2 };
+    }
+  }
+  return { points: simplified, path, targetDirection, midpoint };
+}
+
 function getOrthogonalRoute(source: NodeData, target: NodeData, sourceBox: Box, targetBox: Box, obstacles: Box[]): Route {
   const dx = target.x - source.x;
   const dy = target.y - source.y;
+  if (source.y === target.y && dx !== 0) {
+    const sourceDirection: Direction = dx > 0 ? "right" : "left";
+    const targetDirection: Direction = dx > 0 ? "left" : "right";
+    const start = getPort(source, sourceBox, sourceDirection);
+    const end = getPort(target, targetBox, targetDirection);
+    if (segmentClear(start, end, obstacles)) return routeFromPoints([start, end], targetDirection);
+  }
+  if (source.x === target.x && dy !== 0) {
+    const sourceDirection: Direction = dy > 0 ? "down" : "up";
+    const targetDirection: Direction = dy > 0 ? "up" : "down";
+    const start = getPort(source, sourceBox, sourceDirection);
+    const end = getPort(target, targetBox, targetDirection);
+    if (segmentClear(start, end, obstacles)) return routeFromPoints([start, end], targetDirection);
+  }
   const horizontalFirst: Direction[] = dx >= 0 ? ["right", "left", "down", "up"] : ["left", "right", "up", "down"];
   const verticalFirst: Direction[] = dy >= 0 ? ["down", "up", "right", "left"] : ["up", "down", "left", "right"];
   const ordered = Math.abs(dx) >= Math.abs(dy) ? horizontalFirst : verticalFirst;
@@ -164,17 +195,7 @@ function getOrthogonalRoute(source: NodeData, target: NodeData, sourceBox: Box, 
 
   const best = candidates.sort((a, b) => a.cost - b.cost)[0];
   const points = best?.points ?? [getPort(source, sourceBox, "right"), getPort(target, targetBox, "left")];
-  const d = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
-  let midpoint = points[0];
-  let longest = -1;
-  for (let i = 0; i < points.length - 1; i++) {
-    const length = Math.abs(points[i + 1].x - points[i].x) + Math.abs(points[i + 1].y - points[i].y);
-    if (length > longest) {
-      longest = length;
-      midpoint = { x: (points[i].x + points[i + 1].x) / 2, y: (points[i].y + points[i + 1].y) / 2 };
-    }
-  }
-  return { points, path: d, targetDirection: best?.targetDirection ?? "left", midpoint };
+  return routeFromPoints(points, best?.targetDirection ?? "left");
 }
 
 function toSegments(points: Point[]): Segment[] {
@@ -242,6 +263,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const [actionPanelScreenPos, setActionPanelScreenPos] = useState({ x: 0, y: 0 });
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressActive = useRef(false);
+  const arrowPressRef = useRef<ArrowPressState | null>(null);
 
   const worldPoint = useCallback((clientX: number, clientY: number): Point | null => {
     const svg = svgRef.current;
@@ -349,6 +371,32 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     dragRef.current = null;
   }
 
+  function beginArrowPointer(e: React.PointerEvent<SVGPathElement>, sourceId: string, targetId: string, routeMidpoint: Point) {
+    e.stopPropagation();
+    arrowPressRef.current = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY };
+    try {
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    } catch {
+      // Synthetic events and cancelled touches may not have an active pointer to capture.
+    }
+    startLongPress({ type: "arrow", sourceId, targetId }, routeMidpoint);
+  }
+
+  function moveArrowPointer(e: React.PointerEvent<SVGPathElement>) {
+    const press = arrowPressRef.current;
+    if (!press || press.pointerId !== e.pointerId) return;
+    if (Math.hypot(e.clientX - press.startX, e.clientY - press.startY) > ARROW_PRESS_MOVE_THRESHOLD) {
+      endLongPress();
+      arrowPressRef.current = null;
+    }
+  }
+
+  function finishArrowPointer(e: React.PointerEvent<SVGPathElement>) {
+    if (arrowPressRef.current?.pointerId !== e.pointerId) return;
+    endLongPress();
+    arrowPressRef.current = null;
+  }
+
   function handleTouchStart(e: React.TouchEvent) {
     const svg = svgRef.current;
     if (!svg) return;
@@ -441,7 +489,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       const key = `${tree.id}-${source.id}-${target.id}`;
       return (
         <g key={key} data-arrow-id={key}>
-          <path d={route.path} fill="none" stroke="transparent" strokeWidth={18} style={{ cursor: "pointer" }} onPointerDown={(e) => { e.stopPropagation(); const point = worldPoint(e.clientX, e.clientY); if (point) startLongPress({ type: "arrow", sourceId: source.id, targetId: target.id }, route.midpoint); }} onPointerMove={endLongPress} onPointerUp={endLongPress} onPointerCancel={endLongPress} />
+          <path d={route.path} fill="none" stroke="transparent" strokeWidth={18} style={{ cursor: "pointer" }} onPointerDown={(e) => beginArrowPointer(e, source.id, target.id, route.midpoint)} onPointerMove={moveArrowPointer} onPointerUp={finishArrowPointer} onPointerCancel={finishArrowPointer} />
           <path d={route.path} fill="none" stroke={VIBGYOR_COLORS[arrowColor]} strokeWidth={2} strokeOpacity={0.72} strokeLinecap="round" strokeLinejoin="round" pointerEvents="none" />
           <polygon points={getArrowHead(route)} fill={VIBGYOR_COLORS[arrowColor]} opacity={0.86} pointerEvents="none" />
           {bridgePoints[index].map(({ point, segment }, crossingIndex) => (
