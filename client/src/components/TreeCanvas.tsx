@@ -17,7 +17,7 @@ import {
   getAllNodes as getNodesFromTree,
 } from "@/lib/treeData";
 import ActionPanel from "./ActionPanel";
-import { Plus, Minus } from "lucide-react";
+import { Plus, Minus, Home } from "lucide-react";
 
 interface TreeCanvasProps {
   tree: TreeMap;
@@ -192,6 +192,15 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
 
   const handleZoomIn = useCallback(() => zoomByFactor(0.8), [zoomByFactor]);
   const handleZoomOut = useCallback(() => zoomByFactor(1.25), [zoomByFactor]);
+
+  // ─── RESET VIEW ───
+  const handleResetView = useCallback(() => {
+    if (tree.maxDepth <= 3) {
+      setViewBox({ x: -500, y: -700, w: 1000, h: 1400 });
+    } else {
+      setViewBox({ x: -1400, y: -1600, w: 2800, h: 3200 });
+    }
+  }, [tree.maxDepth]);
 
   // ─── SCROLL WHEEL ZOOM ───
   const handleWheel = useCallback(
@@ -623,6 +632,13 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
           title="Zoom out"
         >
           <Minus className="w-5 h-5" strokeWidth={1.5} />
+        </button>
+        <button
+          onClick={handleResetView}
+          className="w-10 h-10 bg-[#13131a] border border-[#2a2a35] rounded-lg flex items-center justify-center text-[#e4e4e7] hover:bg-[#1a1a24] hover:border-[#3a3a45] active:scale-95 transition-all"
+          title="Reset view"
+        >
+          <Home className="w-5 h-5" strokeWidth={1.5} />
         </button>
       </div>
 
