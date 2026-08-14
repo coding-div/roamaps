@@ -227,6 +227,8 @@ function getOrthogonalRoute(source: NodeData, target: NodeData, sourceBox: Box, 
   const pairs: Array<[Direction, Direction]> = [];
   for (const sourceDirection of ordered) for (const targetDirection of ordered) pairs.push([sourceDirection, targetDirection]);
   const candidates: Array<{ points: Point[]; targetDirection: Direction; cost: number; clean: boolean }> = [];
+  const laneYs = Array.from(new Set(obstacles.flatMap((obstacle) => [obstacle.y - OBSTACLE_PADDING - 2, obstacle.y + obstacle.h + OBSTACLE_PADDING + 2])));
+  const laneXs = Array.from(new Set(obstacles.flatMap((obstacle) => [obstacle.x - OBSTACLE_PADDING - 2, obstacle.x + obstacle.w + OBSTACLE_PADDING + 2])));
 
   for (const [sourceDirection, targetDirection] of pairs) {
     const start = getPort(source, sourceBox, sourceDirection);
@@ -239,6 +241,29 @@ function getOrthogonalRoute(source: NodeData, target: NodeData, sourceBox: Box, 
     ];
     for (const rawPoints of connectors) {
       const points = simplifyPoints(rawPoints);
+      const clear = routeClear(points, obstacles, arrowObstacles);
+      const selfClear = !routeHasSelfConflict(points);
+      const finalSegment = points[points.length - 1] && points[points.length - 2]
+        ? Math.abs(points[points.length - 1].x - points[points.length - 2].x) + Math.abs(points[points.length - 1].y - points[points.length - 2].y)
+        : 0;
+      const clean = clear && selfClear && finalSegment >= MIN_ARROW_SEGMENT;
+      const obstaclePenalty = clean ? 0 : 100000;
+      candidates.push({ points, targetDirection, cost: routeLength(points) + points.length * 10 + obstaclePenalty, clean });
+    }
+
+    for (const laneY of laneYs) {
+      const points = simplifyPoints([start, startOut, { x: startOut.x, y: laneY }, { x: endIn.x, y: laneY }, endIn, end]);
+      const clear = routeClear(points, obstacles, arrowObstacles);
+      const selfClear = !routeHasSelfConflict(points);
+      const finalSegment = points[points.length - 1] && points[points.length - 2]
+        ? Math.abs(points[points.length - 1].x - points[points.length - 2].x) + Math.abs(points[points.length - 1].y - points[points.length - 2].y)
+        : 0;
+      const clean = clear && selfClear && finalSegment >= MIN_ARROW_SEGMENT;
+      const obstaclePenalty = clean ? 0 : 100000;
+      candidates.push({ points, targetDirection, cost: routeLength(points) + points.length * 10 + obstaclePenalty, clean });
+    }
+    for (const laneX of laneXs) {
+      const points = simplifyPoints([start, startOut, { x: laneX, y: startOut.y }, { x: laneX, y: endIn.y }, endIn, end]);
       const clear = routeClear(points, obstacles, arrowObstacles);
       const selfClear = !routeHasSelfConflict(points);
       const finalSegment = points[points.length - 1] && points[points.length - 2]
@@ -337,7 +362,7 @@ function routeMatchesPorts(route: Route, source: NodeData, target: NodeData, sou
   return pointsMatch(first, getPort(source, sourceBox, sourceDirection)) && pointsMatch(route.points[route.points.length - 1], getPort(target, targetBox, route.targetDirection));
 }
 
-function buildDerivedRoutes(tree: TreeMap, override?: { nodeId: string; x: number; y: number }, baselineRoutes?: Map<string, Route>): DerivedRoute[] {
+function buildDerivedRoutes(tree: TreeMap, override?: { nodeId: string; x: number; y: number }): DerivedRoute[] {
   const nodes = getNodesFromTree(tree);
   const edges = getEdgesFromTree(tree);
   const rootId = tree.root?.id ?? null;
@@ -355,17 +380,10 @@ function buildDerivedRoutes(tree: TreeMap, override?: { nodeId: string; x: numbe
     const reverseKey = `${target.id}->${source.id}`;
     const arrowObstacles = reservedRoutes.filter((entry) => entry.key !== reverseKey).flatMap((entry) => entry.segments);
     const key = `${source.id}->${target.id}`;
-    const cached = baselineRoutes?.get(key);
-    const canReuse = Boolean(cached?.clean && routeMatchesPorts(cached, sourceNode, targetNode, sourceBox, targetBox) && routeClear(cached.points, obstacleBoxes) && !routeHasSelfConflict(cached.points) && !routeHasArrowConflict(cached.points, arrowObstacles));
-    let route: Route;
-    if (canReuse && cached) {
-      route = cached;
-    } else {
-      const baseRoute = getOrthogonalRoute(sourceNode, targetNode, sourceBox, targetBox, obstacleBoxes, arrowObstacles);
-      const laneRoute = applyReverseLane(baseRoute, sourceNode, targetNode, sourceBox, targetBox, getReverseLane(source, target, orderedEdges));
-      const clean = laneRoute.clean && !routeHasSelfConflict(laneRoute.points) && !routeHasArrowConflict(laneRoute.points, arrowObstacles);
-      route = clean === laneRoute.clean ? laneRoute : { ...laneRoute, clean };
-    }
+    const baseRoute = getOrthogonalRoute(sourceNode, targetNode, sourceBox, targetBox, obstacleBoxes, arrowObstacles);
+    const laneRoute = applyReverseLane(baseRoute, sourceNode, targetNode, sourceBox, targetBox, getReverseLane(source, target, orderedEdges));
+    const clean = laneRoute.clean && !routeHasSelfConflict(laneRoute.points) && !routeHasArrowConflict(laneRoute.points, arrowObstacles);
+    const route = clean === laneRoute.clean ? laneRoute : { ...laneRoute, clean };
     reservedRoutes.push({ key: `${source.id}->${target.id}`, segments: toSegments(route.points) });
     return { source, target, sourceNode, targetNode, route };
   });
@@ -393,7 +411,6 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const [dragPosition, setDragPosition] = useState<DragPreview | null>(null);
   const [placementPreview, setPlacementPreview] = useState<PlacementPreview | null>(null);
   const dragRef = useRef<DragState | null>(null);
-  const committedRoutesRef = useRef<Map<string, Route>>(new Map());
   const [viewBox, setViewBox] = useState<ViewBox>(() => tree.maxDepth <= 3 ? { x: -500, y: -700, w: 1000, h: 1400 } : { x: -1400, y: -1600, w: 2800, h: 3200 });
   const [isPanning, setIsPanning] = useState(false);
   const panStart = useRef({ x: 0, y: 0 });
@@ -413,7 +430,12 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     const svg = svgRef.current;
     if (!svg) return null;
     const rect = svg.getBoundingClientRect();
-    return { x: viewBox.x + ((clientX - rect.left) / rect.width) * viewBox.w, y: viewBox.y + ((clientY - rect.top) / rect.height) * viewBox.h };
+    const scale = Math.min(rect.width / viewBox.w, rect.height / viewBox.h);
+    const renderedWidth = viewBox.w * scale;
+    const renderedHeight = viewBox.h * scale;
+    const offsetX = (rect.width - renderedWidth) / 2;
+    const offsetY = (rect.height - renderedHeight) / 2;
+    return { x: viewBox.x + (clientX - rect.left - offsetX) / scale, y: viewBox.y + (clientY - rect.top - offsetY) / scale };
   }, [viewBox]);
 
   const zoomByFactor = useCallback((factor: number, centerFracX = 0.5, centerFracY = 0.5) => {
@@ -724,10 +746,10 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const positionOverride = dragPosition ? { nodeId: dragPosition.nodeId, x: dragPosition.x, y: dragPosition.y } : undefined;
   const positionOf = (node: NodeData): NodeData => positionOverride?.nodeId === node.id ? { ...node, x: positionOverride.x, y: positionOverride.y } : node;
   const displayNodes = nodes.map(positionOf);
-  const routes = buildDerivedRoutes(tree, positionOverride, committedRoutesRef.current);
-  useEffect(() => {
-    if (!dragPosition) committedRoutesRef.current = new Map(routes.map(({ source, target, route }) => [`${source.id}->${target.id}`, route]));
-  }, [tree, dragPosition, routes]);
+  // Every render uses the current obstacle field. A third-node move can alter
+  // an arrow without changing either endpoint, so no committed route may be
+  // reused across renders.
+  const routes = buildDerivedRoutes(tree, positionOverride);
   const bridgePoints = routes.map((current, index) => {
     const currentSegments = toSegments(current.route.points);
     const crossings: Array<{ point: Point; segment: Segment }> = [];

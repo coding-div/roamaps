@@ -1,7 +1,8 @@
 /*
  * Obsidian Cartography popup: a centered dark document surface. The short
  * map heading identifies the node; the body is unlimited plain text and stays
- * outside the main roadmap Undo/Redo history.
+ * outside the main roadmap Undo/Redo history. When editing is active, closing
+ * always pauses for the explicit Save changes / Discard changes decision.
  */
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -65,7 +66,7 @@ export default function NodePopup({ node, treeId, dispatch, onClose, switchTarge
   }
 
   function closeRequested() {
-    if (dirty) setDecision("close");
+    if (editing) setDecision("close");
     else onClose();
   }
 
@@ -106,7 +107,7 @@ export default function NodePopup({ node, treeId, dispatch, onClose, switchTarge
           {editing ? <button onClick={saveChanges} className="flex items-center gap-1.5 rounded-lg bg-[#4c7dff] px-3 py-2 text-xs font-medium text-white hover:bg-[#3c6bea] active:scale-95"><Save className="h-3.5 w-3.5" />Save</button> : <button onClick={() => { setDraft(savedContent); setEditing(true); }} className="flex items-center gap-1.5 rounded-lg bg-[#4c7dff] px-3 py-2 text-xs font-medium text-white hover:bg-[#3c6bea] active:scale-95"><FileText className="h-3.5 w-3.5" />Edit Text</button>}
         </div>
 
-        {decision && <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#0a0a0f]/92 p-6"><div className="w-full max-w-sm rounded-xl border border-[#3a3a49] bg-[#171720] p-5 shadow-2xl"><p className="font-sans text-base font-semibold text-white">Save your changes?</p><p className="mt-2 text-sm leading-6 text-[#a7a7b3]">You have unsaved text in this popup. Choose Save changes or Discard changes before continuing.</p><div className="mt-5 flex flex-col gap-2 sm:flex-row"><button onClick={chooseSave} className="flex-1 rounded-lg bg-[#4c7dff] px-3 py-2.5 text-xs font-medium text-white hover:bg-[#3c6bea] active:scale-95">Save changes</button><button onClick={chooseDiscard} className="flex-1 rounded-lg border border-[#ef4444]/45 bg-[#ef4444]/10 px-3 py-2.5 text-xs text-[#ff9e9e] hover:bg-[#ef4444]/20 active:scale-95">Discard changes</button></div></div></div>}
+        {decision && <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#0a0a0f]/92 p-6"><div className="w-full max-w-sm rounded-xl border border-[#3a3a49] bg-[#171720] p-5 shadow-2xl"><p className="font-sans text-base font-semibold text-white">Save your changes?</p><p className="mt-2 text-sm leading-6 text-[#a7a7b3]">You are editing this popup. Choose Save changes or Discard changes before continuing.</p><div className="mt-5 flex flex-col gap-2 sm:flex-row"><button onClick={chooseSave} className="flex-1 rounded-lg bg-[#4c7dff] px-3 py-2.5 text-xs font-medium text-white hover:bg-[#3c6bea] active:scale-95">Save changes</button><button onClick={chooseDiscard} className="flex-1 rounded-lg border border-[#ef4444]/45 bg-[#ef4444]/10 px-3 py-2.5 text-xs text-[#ff9e9e] hover:bg-[#ef4444]/20 active:scale-95">Discard changes</button></div></div></div>}
       </div>
     </div>
   );
