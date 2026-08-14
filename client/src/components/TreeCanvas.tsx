@@ -7,12 +7,23 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import {
   getAllEdges as getEdgesFromTree,
   getAllNodes as getNodesFromTree,
-  MAX_LABEL_LENGTH,
   type Direction,
   type NodeData,
   type TreeMap,
   VIBGYOR_COLORS,
 } from "@/lib/treeData";
+import {
+  canPlaceNode,
+  CHAR_WIDTH,
+  getBoxDimensions,
+  getNodeBox,
+  getNodeEnvelope,
+  isJoinerNode,
+  NODE_RADIUS,
+  JOINER_RADIUS,
+  type Box,
+  type Point,
+} from "@/lib/collision";
 import { useRoadmaps } from "@/contexts/RoadmapContext";
 import { toast } from "sonner";
 import { CircleDot, Home, Link2, Minus, MousePointer2, Plus, Redo2, RotateCcw, Undo2 } from "lucide-react";
@@ -23,13 +34,7 @@ interface TreeCanvasProps {
 }
 
 const GRID_SIZE = 30;
-const NODE_RADIUS = 3;
-const MIN_BOX_W = 100;
-const MIN_BOX_H = 36;
-const MAX_BOX_W = 280;
-const MAX_BOX_H = 120;
 const FONT_SIZE = 12;
-const CHAR_WIDTH = 7.2;
 const LINE_HEIGHT = 18;
 const ROOT_FONT_SIZE = 14;
 const ROUTE_CLEARANCE = 18;
@@ -37,18 +42,17 @@ const OBSTACLE_PADDING = 10;
 const ARROW_LENGTH = 9;
 const ARROW_WIDTH = 5;
 const ARROW_PRESS_MOVE_THRESHOLD = 10;
-const JOINER_RADIUS = 9;
 const JOINER_LANE_GAP = 12;
 const JOINER_MIN_SEGMENT = 64;
 const JOINER_ENDPOINT_MARGIN = 24;
 
 interface ViewBox { x: number; y: number; w: number; h: number }
-interface Point { x: number; y: number }
 interface Segment { a: Point; b: Point }
-interface Box { x: number; y: number; w: number; h: number }
 interface Route { points: Point[]; path: string; targetDirection: Direction; midpoint: Point }
 interface DragState { nodeId: string; pointerId: number; startX: number; startY: number; moved: boolean; x: number; y: number }
 interface ArrowPressState { pointerId: number; startX: number; startY: number }
+interface DragPreview { nodeId: string; x: number; y: number; valid: boolean }
+interface PlacementPreview { kind: "node" | "joiner"; x: number; y: number; valid: boolean }
 type PanelTarget = { type: "node"; nodeId: string } | { type: "arrow"; sourceId: string; targetId: string };
 
 function DotGrid() {
@@ -59,31 +63,6 @@ function DotGrid() {
       </pattern>
     </defs>
   );
-}
-
-function getBoxDimensions(label: string, isRoot: boolean): { w: number; h: number } {
-  const cw = isRoot ? 8 : CHAR_WIDTH;
-  if (!label || label.trim() === "") return { w: isRoot ? 160 : MIN_BOX_W, h: isRoot ? 52 : MIN_BOX_H };
-  const charsPerLine = Math.max(5, Math.floor(MAX_BOX_W / cw));
-  const wrappedLines: string[] = [];
-  for (const rawLine of label.split("\n")) {
-    if (!rawLine) wrappedLines.push("");
-    else for (let start = 0; start < rawLine.length; start += charsPerLine) wrappedLines.push(rawLine.slice(start, start + charsPerLine));
-  }
-  const lineCount = Math.max(1, wrappedLines.length);
-  const longest = Math.max(1, ...wrappedLines.map((line) => line.length));
-  return {
-    w: Math.min(MAX_BOX_W, Math.max(isRoot ? 160 : MIN_BOX_W, longest * cw + 20)),
-    h: Math.min(MAX_BOX_H, Math.max(isRoot ? 52 : MIN_BOX_H, lineCount * LINE_HEIGHT + 20)),
-  };
-}
-
-function isJoiner(node: NodeData): boolean { return node.kind === "joiner"; }
-
-function getNodeBox(node: NodeData, isRoot: boolean): Box {
-  if (isJoiner(node)) return { x: node.x - JOINER_RADIUS, y: node.y - JOINER_RADIUS, w: JOINER_RADIUS * 2, h: JOINER_RADIUS * 2 };
-  const size = getBoxDimensions(node.label, isRoot);
-  return { x: node.x - size.w / 2, y: node.y - size.h / 2, w: size.w, h: size.h };
 }
 
 function getPort(node: NodeData, box: Box, direction: Direction): Point {
@@ -308,10 +287,12 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const { dispatch, canUndo, canRedo } = useRoadmaps();
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [addNodeMode, setAddNodeMode] = useState(false);
   const [connectMode, setConnectMode] = useState(false);
   const [joinerMode, setJoinerMode] = useState(false);
   const [connectSourceId, setConnectSourceId] = useState<string | null>(null);
-  const [dragPosition, setDragPosition] = useState<{ nodeId: string; x: number; y: number } | null>(null);
+  const [dragPosition, setDragPosition] = useState<DragPreview | null>(null);
+  const [placementPreview, setPlacementPreview] = useState<PlacementPreview | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const [viewBox, setViewBox] = useState<ViewBox>(() => tree.maxDepth <= 3 ? { x: -500, y: -700, w: 1000, h: 1400 } : { x: -1400, y: -1600, w: 2800, h: 3200 });
   const [isPanning, setIsPanning] = useState(false);
@@ -385,15 +366,54 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     setConnectMode(false);
   }
 
-  function addIndependentNode() {
+  function makePlacementNode(kind: "node" | "joiner", point: Point): NodeData {
+    return {
+      id: `${tree.id}-placement-preview`,
+      x: point.x,
+      y: point.y,
+      label: kind === "joiner" ? "" : "New node",
+      color: kind === "joiner" ? "white" : "violet",
+      kind,
+      children: [],
+    };
+  }
+
+  function rejectPlacement(message: string, description?: string) {
+    setAddNodeMode(false);
+    setJoinerMode(false);
+    setPlacementPreview(null);
+    toast.message(message, description ? { description } : undefined);
+  }
+
+  function updatePlacementPreview(point: Point, kind: "node" | "joiner", blockedByArrow = false) {
+    const candidate = makePlacementNode(kind, point);
+    const valid = !blockedByArrow && canPlaceNode(candidate, Object.values(tree.nodeMap), tree.root?.id ?? null);
+    setPlacementPreview({ kind, x: point.x, y: point.y, valid });
+  }
+
+  function addIndependentNode(point: Point) {
     const nodeId = `${tree.id}-node-${Date.now()}`;
-    dispatch({ type: "ADD_NODE", treeId: tree.id, node: { id: nodeId, x: viewBox.x + viewBox.w / 2, y: viewBox.y + viewBox.h / 2, label: "New node", color: "violet", kind: "node", children: [] } });
+    const node: NodeData = { id: nodeId, x: point.x, y: point.y, label: "New node", color: "violet", kind: "node", children: [] };
+    if (!canPlaceNode(node, Object.values(tree.nodeMap), tree.root?.id ?? null)) {
+      rejectPlacement("Space occupied", "Choose an open area for the node.");
+      return;
+    }
+    dispatch({ type: "ADD_NODE", treeId: tree.id, node });
+    setAddNodeMode(false);
+    setPlacementPreview(null);
+    toast.success("Node placed");
   }
 
   function createJoiner(point: Point) {
     const nodeId = `${tree.id}-joiner-${Date.now()}`;
-    dispatch({ type: "ADD_JOINER", treeId: tree.id, node: { id: nodeId, x: point.x, y: point.y, label: "", color: "white", kind: "joiner", children: [] } });
+    const node: NodeData = { id: nodeId, x: point.x, y: point.y, label: "", color: "white", kind: "joiner", children: [] };
+    if (!canPlaceNode(node, Object.values(tree.nodeMap), tree.root?.id ?? null)) {
+      rejectPlacement("Space occupied", "Choose an open area for the joiner.");
+      return;
+    }
+    dispatch({ type: "ADD_JOINER", treeId: tree.id, node });
     setJoinerMode(false);
+    setPlacementPreview(null);
     toast.success("Joiner placed", { description: "You can now connect it like any node." });
   }
 
@@ -403,19 +423,29 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     const nearest = nearestPointOnRoute(point, route);
     const isEndpoint = nearest && (nearest.point.x === route.points[0].x && nearest.point.y === route.points[0].y || nearest.point.x === route.points[route.points.length - 1].x && nearest.point.y === route.points[route.points.length - 1].y);
     if (!nearest || nearest.distance > 32 || nearest.segmentLength < JOINER_MIN_SEGMENT || isEndpoint) {
-      toast.message("Choose a clear arrow segment", { description: "The joiner needs room away from the nodes and crossings." });
+      rejectPlacement("Choose a clear arrow segment", "The joiner needs room away from the nodes and crossings.");
       return;
     }
     const nodeId = `${tree.id}-joiner-${Date.now()}`;
-    dispatch({ type: "PLACE_JOINER_ON_ARROW", treeId: tree.id, sourceId, targetId, node: { id: nodeId, x: nearest.point.x, y: nearest.point.y, label: "", color: "white", kind: "joiner", children: [] } });
+    const node: NodeData = { id: nodeId, x: nearest.point.x, y: nearest.point.y, label: "", color: "white", kind: "joiner", children: [] };
+    if (!canPlaceNode(node, Object.values(tree.nodeMap), tree.root?.id ?? null)) {
+      rejectPlacement("Space occupied", "The joiner cannot overlap a node or another joiner.");
+      return;
+    }
+    dispatch({ type: "PLACE_JOINER_ON_ARROW", treeId: tree.id, sourceId, targetId, node });
     setJoinerMode(false);
+    setPlacementPreview(null);
     toast.success("Arrow split", { description: "The joiner now moves with both route segments." });
   }
 
   function beginNodePointer(e: React.PointerEvent<SVGGElement>, node: NodeData) {
     e.stopPropagation();
+    if (addNodeMode) {
+      rejectPlacement("Node not placed", "Tap an empty canvas area.");
+      return;
+    }
     if (joinerMode) {
-      toast.message("Place the joiner on empty canvas or an arrow", { description: "Joiners cannot overlap normal nodes." });
+      rejectPlacement("Joiner not placed", "Tap empty canvas or an arrow segment.");
       return;
     }
     if (connectMode) {
@@ -443,7 +473,11 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       const point = worldPoint(e.clientX, e.clientY);
       const startPoint = worldPoint(drag.startX, drag.startY);
       if (point && startPoint) {
-        setDragPosition({ nodeId: drag.nodeId, x: drag.x + point.x - startPoint.x, y: drag.y + point.y - startPoint.y });
+        const node = tree.nodeMap[drag.nodeId];
+        if (!node) return;
+        const candidate = { ...node, x: drag.x + point.x - startPoint.x, y: drag.y + point.y - startPoint.y };
+        const valid = canPlaceNode(candidate, Object.values(tree.nodeMap), tree.root?.id ?? null, drag.nodeId);
+        setDragPosition({ nodeId: drag.nodeId, x: candidate.x, y: candidate.y, valid });
       }
     }
   }
@@ -453,13 +487,20 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     if (!drag || drag.pointerId !== e.pointerId) return;
     const point = dragPosition?.nodeId === drag.nodeId ? dragPosition : null;
     endLongPress();
-    if (drag.moved && point) dispatch({ type: "MOVE_NODE", treeId: tree.id, nodeId: drag.nodeId, x: point.x, y: point.y });
+    if (drag.moved && point) {
+      if (point.valid) dispatch({ type: "MOVE_NODE", treeId: tree.id, nodeId: drag.nodeId, x: point.x, y: point.y });
+      else toast.message("Space occupied", { description: "The object returned to its previous position." });
+    }
     setDragPosition(null);
     dragRef.current = null;
   }
 
   function beginArrowPointer(e: React.PointerEvent<SVGPathElement>, sourceId: string, targetId: string, route: Route) {
     e.stopPropagation();
+    if (addNodeMode) {
+      rejectPlacement("Node not placed", "A node cannot be placed directly on an arrow.");
+      return;
+    }
     if (joinerMode) {
       placeJoinerOnArrow(sourceId, targetId, route, e.clientX, e.clientY);
       return;
@@ -492,7 +533,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     const svg = svgRef.current;
     if (!svg) return;
     const rect = svg.getBoundingClientRect();
-    if (joinerMode) {
+    if (addNodeMode || joinerMode) {
       setIsPanning(false);
       return;
     }
@@ -537,16 +578,24 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
 
   function handleMouseDown(e: React.MouseEvent<SVGSVGElement>) {
     if ((e.target as Element).closest("[data-node-id]") || (e.target as Element).closest("[data-arrow-id]")) return;
-    if (joinerMode) return;
+    if (addNodeMode || joinerMode) return;
     setIsPanning(true);
     panStart.current = { x: e.clientX, y: e.clientY };
   }
 
   function handleSvgPointerDown(e: React.PointerEvent<SVGSVGElement>) {
-    if (!joinerMode) return;
+    if (!addNodeMode && !joinerMode) return;
     if ((e.target as Element).closest("[data-node-id]") || (e.target as Element).closest("[data-arrow-id]")) return;
     const point = worldPoint(e.clientX, e.clientY);
-    if (point) createJoiner(point);
+    if (!point) return;
+    if (addNodeMode) addIndependentNode(point);
+    else createJoiner(point);
+  }
+
+  function handleSvgPointerMove(e: React.PointerEvent<SVGSVGElement>) {
+    if (!addNodeMode && !joinerMode) return;
+    const point = worldPoint(e.clientX, e.clientY);
+    if (point) updatePlacementPreview(point, addNodeMode ? "node" : "joiner", addNodeMode && Boolean((e.target as Element).closest("[data-arrow-id]")));
   }
 
   function handleMouseMove(e: React.MouseEvent<SVGSVGElement>) {
@@ -571,7 +620,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     const targetNode = positionOf(target);
     const sourceBox = boxes.get(source.id)!;
     const targetBox = boxes.get(target.id)!;
-    const obstacleBoxes = displayNodes.filter((node) => node.id !== source.id && node.id !== target.id && !isJoiner(node)).map((node) => boxes.get(node.id)!);
+    const obstacleBoxes = displayNodes.filter((node) => node.id !== source.id && node.id !== target.id && !isJoinerNode(node)).map((node) => boxes.get(node.id)!);
     const baseRoute = getOrthogonalRoute(sourceNode, targetNode, sourceBox, targetBox, obstacleBoxes);
     return { source, target, sourceNode, targetNode, route: applyReverseLane(baseRoute, sourceNode, targetNode, sourceBox, targetBox, getReverseLane(source, target, edges)) };
   });
@@ -610,13 +659,15 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   function renderNodes(): ReactNode[] {
     return displayNodes.map((node) => {
       const isRoot = node.id === rootId;
-      const joiner = isJoiner(node);
+      const joiner = isJoinerNode(node);
       const selected = connectSourceId === node.id;
+      const invalidDrag = dragPosition?.nodeId === node.id && !dragPosition.valid;
       if (joiner) {
         return (
           <g key={`${tree.id}-${node.id}`} data-node-id={node.id} className="tree-node-group" style={{ cursor: connectMode ? "crosshair" : dragPosition?.nodeId === node.id ? "grabbing" : "grab" }} onPointerDown={(e) => beginNodePointer(e, node)} onPointerMove={moveNodePointer} onPointerUp={finishNodePointer} onPointerCancel={finishNodePointer}>
+            <circle cx={node.x} cy={node.y} r={JOINER_RADIUS + 6} fill="transparent" pointerEvents="all" />
             <circle cx={node.x + 2} cy={node.y + 3} r={JOINER_RADIUS + 3} fill="#020307" opacity={0.82} pointerEvents="none" />
-            <circle cx={node.x} cy={node.y} r={JOINER_RADIUS + 1.5} fill="#0c1118" stroke={selected ? "#f2f4fa" : VIBGYOR_COLORS[node.color]} strokeWidth={selected ? 3 : 2.5} opacity={0.98} />
+            <circle cx={node.x} cy={node.y} r={JOINER_RADIUS + 1.5} fill="#0c1118" stroke={invalidDrag ? "#ef4444" : selected ? "#f2f4fa" : VIBGYOR_COLORS[node.color]} strokeWidth={invalidDrag || selected ? 3 : 2.5} opacity={0.98} />
             <circle cx={node.x} cy={node.y} r={JOINER_RADIUS - 1.5} fill="#34475b" stroke="#f4f8fb" strokeOpacity={0.72} strokeWidth={1} pointerEvents="none" />
             <circle cx={node.x - 2.5} cy={node.y - 3} r={3.2} fill="#f8fbff" opacity={0.78} pointerEvents="none" />
           </g>
@@ -624,13 +675,33 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       }
       const size = getBoxDimensions(node.label, isRoot);
       const textLines = buildTextLines(node.label, size.w, isRoot);
+      const envelope = getNodeEnvelope(node, isRoot);
       return (
         <g key={`${tree.id}-${node.id}`} data-node-id={node.id} className="tree-node-group" style={{ cursor: connectMode ? "crosshair" : dragPosition?.nodeId === node.id ? "grabbing" : "grab" }} onPointerDown={(e) => beginNodePointer(e, node)} onPointerMove={moveNodePointer} onPointerUp={finishNodePointer} onPointerCancel={finishNodePointer}>
-          <rect x={node.x - size.w / 2} y={node.y - size.h / 2} width={size.w} height={size.h} rx={NODE_RADIUS} fill="#13131a" stroke={selected ? "#f2f4fa" : VIBGYOR_COLORS[node.color]} strokeWidth={selected ? 3 : isRoot ? 2 : 1.5} strokeOpacity={selected ? 1 : 0.82} />
+          <rect x={envelope.kind === "rect" ? envelope.x : node.x - size.w / 2} y={envelope.kind === "rect" ? envelope.y : node.y - size.h / 2} width={envelope.kind === "rect" ? envelope.w : size.w} height={envelope.kind === "rect" ? envelope.h : size.h} rx={NODE_RADIUS + 8} fill="transparent" pointerEvents="all" />
+          <rect x={node.x - size.w / 2} y={node.y - size.h / 2} width={size.w} height={size.h} rx={NODE_RADIUS} fill="#13131a" stroke={invalidDrag ? "#ef4444" : selected ? "#f2f4fa" : VIBGYOR_COLORS[node.color]} strokeWidth={invalidDrag || selected ? 3 : isRoot ? 2 : 1.5} strokeOpacity={invalidDrag || selected ? 1 : 0.82} />
           {textLines.length > 0 && <g pointerEvents="none">{textLines.map((line, lineIndex) => <text key={lineIndex} x={node.x} y={node.y - ((textLines.length - 1) * LINE_HEIGHT) / 2 + lineIndex * LINE_HEIGHT} textAnchor="middle" dominantBaseline="central" fill="#e4e4e7" fontSize={isRoot ? ROOT_FONT_SIZE : FONT_SIZE} fontWeight={isRoot ? 600 : 500} fontFamily="'Space Grotesk', sans-serif">{line}</text>)}</g>}
         </g>
       );
     });
+  }
+
+  function renderPlacementPreview(): ReactNode {
+    if (!placementPreview) return null;
+    const invalid = !placementPreview.valid;
+    if (placementPreview.kind === "joiner") {
+      return <g pointerEvents="none" opacity={0.78}>
+        <circle cx={placementPreview.x + 2} cy={placementPreview.y + 3} r={JOINER_RADIUS + 3} fill="#020307" opacity={0.65} />
+        <circle cx={placementPreview.x} cy={placementPreview.y} r={JOINER_RADIUS + 1.5} fill="#0c1118" stroke={invalid ? "#ef4444" : "#e8f0f6"} strokeWidth={3} strokeDasharray="4 3" />
+        <circle cx={placementPreview.x} cy={placementPreview.y} r={JOINER_RADIUS - 1.5} fill="#34475b" />
+      </g>;
+    }
+    const previewNode = makePlacementNode("node", { x: placementPreview.x, y: placementPreview.y });
+    const size = getBoxDimensions(previewNode.label, false);
+    return <g pointerEvents="none" opacity={0.78}>
+      <rect x={placementPreview.x - size.w / 2} y={placementPreview.y - size.h / 2} width={size.w} height={size.h} rx={NODE_RADIUS} fill="#13131a" fillOpacity={0.75} stroke={invalid ? "#ef4444" : "#8bb7ff"} strokeWidth={2.5} strokeDasharray="8 5" />
+      <text x={placementPreview.x} y={placementPreview.y} textAnchor="middle" dominantBaseline="central" fill="#e4e4e7" fontSize={FONT_SIZE} fontWeight={500} fontFamily="'Space Grotesk', sans-serif">New node</text>
+    </g>;
   }
 
   useEffect(() => {
@@ -643,17 +714,18 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
 
   return (
     <div ref={containerRef} className="relative h-full w-full overflow-hidden" style={{ background: "#0a0a0f" }}>
-      <svg ref={svgRef} width="100%" height="100%" viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`} onPointerDown={handleSvgPointerDown} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={() => setIsPanning(false)} onMouseLeave={() => setIsPanning(false)} onWheel={(e) => { e.preventDefault(); const rect = svgRef.current?.getBoundingClientRect(); if (rect) zoomByFactor(e.deltaY > 0 ? 1.12 : 0.89, (e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height); }} onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={() => { setIsPanning(false); isPinching.current = false; initialPinchDistance.current = null; }} style={{ cursor: joinerMode ? "crosshair" : isPanning ? "grabbing" : "grab", touchAction: "none" }}>
+      <svg ref={svgRef} width="100%" height="100%" viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`} onPointerDown={handleSvgPointerDown} onPointerMove={handleSvgPointerMove} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={() => setIsPanning(false)} onMouseLeave={() => { setIsPanning(false); setPlacementPreview(null); }} onWheel={(e) => { e.preventDefault(); const rect = svgRef.current?.getBoundingClientRect(); if (rect) zoomByFactor(e.deltaY > 0 ? 1.12 : 0.89, (e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height); }} onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={() => { setIsPanning(false); isPinching.current = false; initialPinchDistance.current = null; }} style={{ cursor: addNodeMode || joinerMode ? "crosshair" : isPanning ? "grabbing" : "grab", touchAction: "none" }}>
         <DotGrid />
         <rect width="10000" height="10000" x={-5000} y={-5000} fill="url(#dotGrid)" />
         {renderEdges()}
         {renderNodes()}
+        {renderPlacementPreview()}
       </svg>
 
       <div className="absolute left-5 top-16 z-10 flex max-w-[calc(100%-2.5rem)] flex-wrap items-center gap-2">
-        <button onClick={() => { setJoinerMode(false); addIndependentNode(); }} className="flex items-center gap-2 rounded-lg border border-[#2a2a35] bg-[#13131a] px-3 py-2 text-xs text-[#c4c4cc] transition-all hover:border-[#3B82F6]/60 hover:text-white active:scale-95" title="Add an independent node"><Plus className="h-4 w-4" />Add node</button>
-        <button onClick={() => { setJoinerMode((mode) => !mode); setConnectMode(false); setConnectSourceId(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${joinerMode ? "border-[#dbeafe] bg-[#f8fafc]/10 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#dbeafe]/60 hover:text-white"}`} title="Place one joiner"><CircleDot className="h-4 w-4" />{joinerMode ? "Place joiner" : "Add joiner"}</button>
-        <button onClick={() => { setConnectMode((mode) => !mode); setJoinerMode(false); setConnectSourceId(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${connectMode ? "border-[#3B82F6] bg-[#3B82F6]/15 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#3B82F6]/60 hover:text-white"}`} title="Connect two nodes"><Link2 className="h-4 w-4" />{connectMode ? (connectSourceId ? "Select target" : "Select source") : "Connect nodes"}</button>
+        <button onClick={() => { setAddNodeMode((mode) => !mode); setJoinerMode(false); setConnectMode(false); setConnectSourceId(null); setPlacementPreview(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${addNodeMode ? "border-[#8bb7ff] bg-[#8bb7ff]/15 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#3B82F6]/60 hover:text-white"}`} title="Place one node"><Plus className="h-4 w-4" />{addNodeMode ? "Place node" : "Add node"}</button>
+        <button onClick={() => { setJoinerMode((mode) => !mode); setAddNodeMode(false); setConnectMode(false); setConnectSourceId(null); setPlacementPreview(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${joinerMode ? "border-[#dbeafe] bg-[#f8fafc]/10 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#dbeafe]/60 hover:text-white"}`} title="Place one joiner"><CircleDot className="h-4 w-4" />{joinerMode ? "Place joiner" : "Add joiner"}</button>
+        <button onClick={() => { setConnectMode((mode) => !mode); setAddNodeMode(false); setJoinerMode(false); setConnectSourceId(null); setPlacementPreview(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${connectMode ? "border-[#3B82F6] bg-[#3B82F6]/15 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#3B82F6]/60 hover:text-white"}`} title="Connect two nodes"><Link2 className="h-4 w-4" /><span>{connectMode ? (connectSourceId ? "Select target" : "Select source") : "Connect nodes"}</span></button>
         {connectMode && <button onClick={() => { setConnectMode(false); setConnectSourceId(null); }} className="rounded-lg border border-[#2a2a35] bg-[#13131a] p-2 text-[#8a8a95] hover:text-white" title="Cancel connection mode"><MousePointer2 className="h-4 w-4" /></button>}
         <div className="flex items-center gap-1 rounded-lg border border-[#2a2a35] bg-[#13131a] p-1">
           <button onClick={() => dispatch({ type: "UNDO" })} disabled={!canUndo} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white disabled:cursor-not-allowed disabled:opacity-35" title="Undo"><Undo2 className="h-4 w-4" /></button>

@@ -56,4 +56,58 @@ The canvas now has an Add Joiner toolbar mode that toggles off when pressed agai
 
 The branch browser trial passed TypeScript checking, production build, Add Joiner placement, arrow splitting, joiner-first selection, joiner removal with Undo, attached-joiner dragging, persistence, clean reload, and a clean final browser console. The final imprint pass applied the trusted archive/card/editor status-rail recommendations; remaining non-blocking tokenization notes are in `context/IMPRINT_BRANCH_REVIEW.md`. The review report is `/home/ubuntu/roamaps-live/BRANCH_REVIEW_REPORT.md`, and the numbered tablet tasks are `/home/ubuntu/roamaps-live/USER_TRIAL_TASKS.md`.
 
-No user-tablet findings have been reported yet for this branch stage. The next recovery/improvement pass must start from the numbered trial-task result rather than assumptions.
+## Branch-stage user trial revision — 2026-08-13
+
+The user completed all seven numbered tablet trial tasks successfully and then reported nine image observations. The first issue is confirmed as a visual routing problem: two separate directed arrows can share or overlap the same orthogonal corridor, making one appear to connect to the middle of another. This is not intended arrow-to-arrow attachment; only a joiner placed directly on an eligible arrow should split that arrow.
+
+The third image is classified as a targeted arrowhead-rendering bug candidate. The current rule is correct in principle—arrowheads are drawn on arrows whose target is a normal node and suppressed only when the target is a joiner—but the final-segment polygon can still be visually hidden or misplaced in some routed layouts. It requires reproduction before choosing a fix.
+
+The fourth image is classified as a targeted spatial-placement bug: normal rectangular nodes can occupy overlapping positions because independent-node creation and node dragging currently do not enforce separation. The correct prevention behavior remains an open product decision and must be asked one question at a time rather than guessed.
+
+The fifth image is a clarity issue, not a new graph rule. The explicit rule to communicate is: every arrow ending at a normal node has an arrowhead; an arrow ending at a joiner has no arrowhead; an attached joiner may show plain tails/stems, but the joiner itself never receives an arrowhead.
+
+Images six through eight show intended bypass behavior. When a joiner or node with incoming and outgoing arrows is removed, the reducer reconnects each incoming source to each outgoing target, so the route may appear to shift directly to the next node. This is required by the approved branch contract, not an accidental rendering change.
+
+The ninth image is classified as a targeted placement-validation bug. Direct taps on a visible normal node are rejected in Add Joiner mode, but free joiners created on blank canvas are not currently checked against nearby normal-node bounds, so a joiner can be placed visually on top of a node. This must be fixed after the consolidated plan is approved.
+
+No code changes are approved yet. The next step is to revise the remaining observations with the user, resolve the open spacing-prevention decision one question at a time, then present one consolidated fix plan for approval.
+
+## Collision-prevention proposal — user revision
+
+The user wants normal nodes and joiners to have invisible clickable/collision areas around their visible shapes. These areas must never overlap. Nodes may appear visually close, but placement or movement must halt whenever the invisible interaction areas would overlap another node or joiner.
+
+For placement, the user proposes using the joiner placement method for both object types: after activating Add Node or Add Joiner, a tap on empty canvas places the object only if the location is free of nodes, joiners, and arrows and the object’s invisible area would not overlap another node or joiner. If the candidate location is occupied or too close, placement is rejected, the mode turns off, and the user must activate the toolbar option again manually.
+
+Arrows are different from node/joiner collision areas. If the candidate location is not directly on an arrow, routing should go around the arrow without touching it. If the user directly taps an arrow while Add Node or Add Joiner mode is active, placement must halt, the mode must turn off, and the user must activate it again manually. The user confirmed that Add Node must change from immediate center spawning to tap-to-place mode: activate the toolbar option, tap the canvas to place one node, then turn the mode off.
+
+## Proposed stronger overlap solution — not yet approved
+
+Rather than scattering separate overlap checks through Add Node, Add Joiner, and dragging, use one shared spatial rule called an interaction envelope. Each normal node gets a padded rectangular envelope based on its visible box; each joiner gets a padded circular envelope based on its visible radius. The envelope is both the invisible tablet hit area and the collision boundary, so the same rule governs placement, selection, and movement.
+
+Placement would use a preview gate: the candidate is committed only if its envelope does not intersect another node or joiner envelope and the tap was not on an arrow’s transparent hit path. A rejected candidate is never committed, the active mode turns off, and a tablet toast explains why. There is no automatic nearest-space snap, avoiding unexpected movement away from the user’s chosen location.
+
+Movement would use a last-valid-position clamp: the object follows the finger while its envelope is clear, then stops at the last valid position when another envelope would be crossed. This prevents accidental overlap without allowing a node or joiner to jump unpredictably. Existing routing rules remain separate: normal nodes can be routing obstacles, joiners remain non-obstacles as previously approved, and direct arrow taps in placement mode reject the placement.
+
+## User refinement of overlap recovery — approved
+
+The user proposes five refinements. First, an enlarged joiner interaction area must not reject a joiner that is intentionally placed directly on an eligible branch arrow; this is an intentional arrow-splitting exception. Second, a normal node’s protected area must resize when its label grows or shrinks. Third, if label growth would make that envelope overlap another object, additional characters must be refused. Fourth, if a drag ends inside another object’s protected area, the dragged object must return to the exact position from which the drag began. Fifth, if any action would cause overlap—dragging, spawning, or label growth—the mistake should be automatically undone immediately.
+
+Recommended refinement: implement the last rule as a transaction rejection rather than creating a visible extra Undo history entry. Tentative movement or label changes are previewed; only valid results are committed. If invalid, the object or label returns to its last committed state, accompanied by a short tablet message. This gives the user the same automatic correction without polluting Undo/Redo with an action that never became valid. Joiner-on-arrow placement is allowed on any eligible existing arrow segment, including a segment created by an earlier arrow split, provided the segment has sufficient room and no node/crossing conflict.
+
+The user clarified the label-history distinction. During label editing, if one newly typed or pasted character or line would make the node envelope overlap another object, only that attempted addition is rejected; the already-valid label remains and there is no Redo for the rejected addition. After the user saves a valid label edit, it is one ordinary history transaction. A later user Undo reverses the entire saved label change and restores the previous text.
+
+The user approved the final edge cases: saved roadmaps contain no overlap; only normal node bodies and joiner circles count as collision envelopes, not attached tails/stems; invalid drags show a temporary warning and restore the exact pre-drag position; middle insertion and paste preserve surrounding text while keeping the longest valid inserted beginning; and blocked label growth displays “No room for more text.” The complete approved design is recorded in `/home/ubuntu/roamaps/COLLISION_IMPLEMENTATION_CONTRACT.md`. Implementation remains gated on the final contract approval message, after which the code may be changed.
+
+## Collision-prevention implementation completed — 2026-08-14
+
+The user approved the complete collision contract and explicitly required protection of all earlier routing, arrow, joiner, history, persistence, and tablet-pointer fixes. The live project now has a shared shape-aware collision module at `client/src/lib/collision.ts`. Normal nodes use label-sized rectangular envelopes expanded by 12 world units; joiners use circular envelopes expanded by 6 world units. The same geometry supports placement, selection hit areas, dragging validation, label fitting, and reducer-level guards.
+
+Add Node now uses one-shot tap-to-place behavior like Add Joiner. Both modes show a ghost preview, reject occupied or too-close node/joiner envelopes, reject direct arrow taps when appropriate, turn off after one attempt, and require manual reactivation. Add Joiner preserves the intentional exception for direct placement on any eligible arrow segment, including a segment created by an earlier split. Joiners remain excluded from routing obstacles, and attached tails/stems remain outside the joiner collision envelope.
+
+Dragging now previews invalid positions with a red outline and restores the exact pre-drag position on an overlapping release. Valid movement remains one normal Undoable action. The reducer rejects invalid movement and placement before history commit, so automatic rejection creates no extra visible Undo/Redo step. Label editing validates the resized envelope continuously, accepts the longest valid inserted beginning for typing and paste—including middle insertion—preserves surrounding text, and displays “No room for more text” when growth is blocked. A saved valid label edit remains one complete user-history transaction.
+
+Regression safeguards were preserved: perpendicular direct routes and orthogonal fallback routing, crossing bridges, reverse-arrow lanes, manual arrowheads, joiner split metadata and tails, joiner-first selection, long-press arrow removal with touch drift tolerance, bypass deletion, cycles, duplicate prevention, undo/redo/reset, and localStorage persistence. Reducer guards now protect placement, movement, label updates, and joiner-on-arrow placement even if an action arrives outside the visible controls.
+
+Verification passed: `pnpm check`, `pnpm build`, `git diff --check`, clean development-server restart, and a post-restart browser console check. The browser trial confirmed tap-to-place Add Node, rejection on a node envelope, free joiner placement, joiner-on-long-arrow splitting, invalid node-drag rollback with “Space occupied,” normal-node Edit Label availability, and longest-valid label rejection (a 180-character candidate retained a 29-character valid prefix and displayed the approved message). Full evidence is in `/home/ubuntu/roamaps-live/collision-browser-findings.md`.
+
+The earlier duplicate-declaration message was stale HMR output from before the clean server restart; the restarted server reported TypeScript with zero errors and the current browser console had no runtime errors. A visual review was captured for the landing page and editor. The screenshot helper’s `/tree/1` path rendered the landing composition because Roamaps uses hash routing; direct browser navigation to `/#/tree/1` rendered the full editor correctly, so no unrelated landing-page redesign was made during this functional collision milestone.

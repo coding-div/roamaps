@@ -11,6 +11,7 @@ import {
   type TreeMap,
   MAX_LABEL_LENGTH,
 } from "@/lib/treeData";
+import { canPlaceNode, labelFits } from "@/lib/collision";
 
 const STORAGE_KEY = "roamaps-roadmaps-v1";
 const MAX_HISTORY = 60;
@@ -106,11 +107,11 @@ function applyContentAction(trees: TreeMap[], action: TreeContentAction): TreeMa
 
     switch (action.type) {
       case "ADD_NODE":
-        if (nodeMap[action.node.id]) return tree;
+        if (nodeMap[action.node.id] || !canPlaceNode(action.node, Object.values(nodeMap), tree.root?.id ?? null)) return tree;
         nodeMap[action.node.id] = { ...action.node, kind: "node", children: [] };
         return { ...tree, nodeMap };
       case "ADD_JOINER":
-        if (nodeMap[action.node.id]) return tree;
+        if (nodeMap[action.node.id] || !canPlaceNode(action.node, Object.values(nodeMap), tree.root?.id ?? null)) return tree;
         nodeMap[action.node.id] = { ...action.node, kind: "joiner", label: "", children: [] };
         return { ...tree, nodeMap };
       case "REMOVE_NODE": {
@@ -145,6 +146,8 @@ function applyContentAction(trees: TreeMap[], action: TreeContentAction): TreeMa
       case "MOVE_NODE": {
         const node = nodeMap[action.nodeId];
         if (!node || !Number.isFinite(action.x) || !Number.isFinite(action.y)) return tree;
+        const candidate = { ...node, x: action.x, y: action.y };
+        if (!canPlaceNode(candidate, Object.values(nodeMap), tree.root?.id ?? null, action.nodeId)) return tree;
         node.x = action.x;
         node.y = action.y;
         return syncRoot(tree, nodeMap);
@@ -152,7 +155,9 @@ function applyContentAction(trees: TreeMap[], action: TreeContentAction): TreeMa
       case "UPDATE_LABEL": {
         const node = nodeMap[action.nodeId];
         if (!node) return tree;
-        node.label = action.label.slice(0, MAX_LABEL_LENGTH);
+        const label = action.label.slice(0, MAX_LABEL_LENGTH);
+        if (!labelFits(tree, node, label)) return tree;
+        node.label = label;
         return syncRoot(tree, nodeMap);
       }
       case "UPDATE_NODE_COLOR": {
@@ -187,6 +192,7 @@ function applyContentAction(trees: TreeMap[], action: TreeContentAction): TreeMa
         if (!source || !target || nodeMap[action.node.id] || action.sourceId === action.targetId || action.sourceId === action.node.id || action.targetId === action.node.id) return tree;
         const original = source.children.find((child) => child.targetId === action.targetId);
         if (!original) return tree;
+        if (!canPlaceNode(action.node, Object.values(nodeMap), tree.root?.id ?? null)) return tree;
         nodeMap[action.node.id] = { ...action.node, kind: "joiner", label: "", children: [] };
         source.children = source.children.map((child) => child.targetId === action.targetId
           ? { ...child, targetId: action.node.id, splitJoinerId: action.node.id }

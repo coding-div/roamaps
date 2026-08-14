@@ -3,11 +3,11 @@
 - [x] Identify the single highest-leverage product decision for the first MVP feature.
 - [x] Record the user’s clarified perpendicular-arrow, crossing, reset, undo/redo, movable-node, and two-node connection requirements.
 - [x] Ask one question and wait for the user’s answer about root removal.
-- [ ] Write and present the implementation contract before changing code.
+- [x] Write and present the implementation contract before changing code.
 - [x] Implement only after the user approves the contract.
-- [ ] Run imprint, type-check, production build, and browser verification.
-- [ ] Report review findings by severity without auto-fixing them.
-- [ ] Save durable memory and create a WebDev checkpoint after the review handoff.
+- [x] Run imprint, type-check, production build, and browser verification.
+- [x] Report review findings by severity without auto-fixing them.
+- [x] Save durable memory and create a WebDev checkpoint after the review handoff.
 - [x] Deliver the result as a clickable live trial website for tablet testing, never as a PDF overview.
 - [x] Recover and fix arrow removal so an existing arrow can be selected and deleted reliably.
 - [x] Improve route selection so direct horizontal or vertical perpendicular connections are preferred when clear, while retaining orthogonal obstacle-aware routing when needed.
@@ -17,4 +17,101 @@
 - [x] Preserve small touch drift during arrow long-press while cancelling on meaningful movement or cancellation.
 - [x] Prefer clear direct horizontal or vertical routes before orthogonal fallback routing.
 - [x] Verify arrow removal, direct aligned routes, undo/redo, persistence, and clean reset in the live trial.
-- [ ] Synchronize the recovery changes to GitHub with an explicit commit and push, then save a new WebDev checkpoint.
+- [x] Synchronize the recovery changes to GitHub with an explicit commit and push, then save a new WebDev checkpoint.
+
+## Branch stage — architecture gate
+
+- [x] Preserve the existing A/B two-node connection method.
+- [x] Treat every object as a node; remove special center/root deletion semantics.
+- [x] Define ordinary node and joiner deletion as incoming-to-outgoing bypass when both sides exist.
+- [x] Use every incoming source × every outgoing target for bypass deletion, skipping duplicate directed arrows.
+- [x] Allow cycles.
+- [x] Block duplicate same-direction arrows; allow reverse-direction arrows as separate objects.
+- [x] Render reverse-direction arrows on distinct parallel lanes with no overlap.
+- [x] Keep joiners visible, selectable, movable, smaller, unlabeled, and persistent after branch construction.
+- [x] Allow joiners to be placed on arrows without treating them as routing obstacles.
+- [x] Split an arrow when a joiner is placed on it: source → joiner → target.
+- [x] Add Joiner mode places at most one joiner per activation; multiple joiners are allowed when created one-by-one.
+- [x] One tap on empty canvas places a joiner; one tap on an existing arrow places and splits a joiner at that route.
+- [x] Bypass arrows inherit the sole incoming arrow color; if there are two or more incoming arrows, bypass arrows use white.
+- [x] Add black and white to the palette with theme-safe charcoal and softened silver-white tokens.
+- [x] If a node or joiner has only incoming or only outgoing arrows, remove it and all its connected arrows without creating replacements.
+- [x] Allow cycles, and keep reverse-direction arrows as distinct non-overlapping lanes.
+- [x] A joiner has selection priority over an underlying arrow; select the arrow from another segment away from the joiner.
+- [x] One joiner is created per Add Joiner activation; multiple joiners may exist when created one-by-one.
+- [x] A free joiner remains free when dragged across an arrow; only direct placement through Add Joiner attaches/splits it.
+- [x] Reject joiner placement on a normal node, at an arrow crossing, or on a segment too short to split cleanly.
+- [x] An attached joiner moves freely like a node while staying attached to its split arrow segments.
+- [x] If one split segment is removed, the other segment and joiner relationship remain.
+- [x] A free joiner has no tails; an attached joiner has plain tails/stems without arrowheads.
+- [x] Both split segments inherit the original arrow color; joiner ring color is editable and 3D depth remains.
+- [x] Joiner-to-joiner connections are allowed; self-loops are blocked while multi-node cycles are allowed.
+- [x] Keep maxDepth only for legacy demo descriptions and initial viewport sizing; do not use it as a graph limit.
+- [x] Add Joiner is a visible toolbar action with explanatory tablet toasts.
+- [x] Free joiners and attached joiners continue to behave like ordinary nodes for connection and movement.
+- [x] Split arrow segments remain ordinary editable arrows for color, removal, reverse links, bridges, and history.
+- [x] Include joiners in visible node and arrow statistics.
+- [x] Add Joiner mode behaves like Connect Nodes mode and toggles off when its toolbar option is pressed again.
+- [x] New joiners use a white visually 3D treatment in the 2D canvas; the ring remains editable later.
+- [x] Another toolbar action cancels waiting Add Joiner mode without creating an object.
+- [x] Home previews do not display joiners.
+- [x] Write and approve the full branch implementation contract before coding.
+- [x] Implement the approved joiner data model, split-arrow metadata, and reducer actions.
+- [x] Implement Add Joiner placement, attached/free movement, selection priority, tails, and tablet toasts.
+- [x] Implement branch routing, direct aligned routes, reverse-arrow lanes, and joiner non-obstacle behavior.
+- [x] Run imprint, TypeScript check, production build, and browser verification.
+- [x] Record every implementation change, test result, error, and solution in memory and verification notes.
+- [x] Synchronize the completed milestone to GitHub and save a WebDev checkpoint.
+- [x] Deliver a clickable trial and a numbered tablet testing checklist for the user.
+- [x] Implement typed joiners, branch creation, arrow splitting, bypass deletion, and reverse lanes.
+- [x] Run imprint and review; report findings without auto-fixing until approved.
+- [x] Save all branch findings, fixes, and verification results to memory, checklist, GitHub, and a WebDev checkpoint.
+
+## Branch-stage review handoff
+
+- [x] Confirm no Blocker or Major review findings remain before delivery.
+- [x] Record Minor manual-tablet validation and Non-blocking static-persistence findings.
+- [x] Create `BRANCH_REVIEW_REPORT.md` and `USER_TRIAL_TASKS.md`.
+- [ ] Receive and record the user’s numbered tablet trial results.
+- [x] Record issue 1: separate arrows can visually overlap or share the same orthogonal corridor, making one appear to connect to the middle of another.
+- [ ] Revise and classify all nine reported image observations before implementing any fix.
+- [ ] Confirm which observations are intended behavior, which are clarity issues, and which are actual bugs.
+- [ ] Present the consolidated fix plan and receive user approval before changing code.
+- [ ] Reproduce and isolate the image 3 arrowhead-rendering failure before selecting a geometry fix.
+- [ ] Decide the user-approved prevention behavior for overlapping normal nodes.
+- [ ] Add a proximity collision rule for free joiner placement after the plan is approved.
+- [ ] Preserve the approved bypass behavior explanation for images 6–8; do not change it as a bug fix.
+- [x] Record the user’s invisible node/joiner interaction-area rule: visible shapes may approach, but invisible clickable areas must never overlap.
+- [x] Record the user’s placement rule: empty-canvas taps place only when no node, joiner, or arrow occupies the candidate area and collision bounds remain clear.
+- [x] Record the user’s rejection rule: occupied/too-close candidates and direct arrow taps halt placement and require manual mode reactivation.
+- [x] Confirm Add Node should use tap-to-place mode matching Add Joiner instead of immediately spawning at canvas center.
+- [ ] Define the exact collision-area dimensions and movement behavior before implementation.
+- [ ] Compare simple invisible-area rejection with a stronger preview-and-snap collision design; choose one without guessing.
+- [ ] Receive approval for the improved overlap-prevention contract before editing application code.
+- [x] Record the proposed stronger design: shared interaction envelopes, preview-gated placement, direct-arrow rejection, and last-valid-position clamping during movement.
+- [x] Confirm approval of the stronger collision design before implementation.
+- [x] Record the refinement: attached joiners may be placed directly on eligible branch arrows despite their enlarged interaction area.
+- [x] Record the refinement: normal-node interaction envelopes resize with label content.
+- [x] Record the refinement: label growth is blocked when the resized envelope would overlap another object.
+- [x] Record the refinement: an invalid drag release restores the object to its pre-drag position.
+- [x] Record the refinement: any committed overlap-causing action must be rolled back immediately.
+- [x] Confirm that direct joiner placement is allowed on any eligible existing arrow segment, including segments previously created by splitting another arrow.
+- [x] Decide that label editing rejects only the newly typed or pasted character/line that would cause overlap; the already-valid text remains.
+- [x] Decide that a saved label edit remains one normal user-history action, so user Undo restores the entire previous label.
+- [x] Define automatic overlap recovery as an internal rejection with no extra visible Undo or Redo entry.
+- [x] Record the recommendation to treat invalid overlap-causing actions as rejected transactions rather than extra visible Undo history entries.
+- [x] Preserve the no-overlap invariant for saved roadmaps; no automatic legacy overlap migration is needed.
+- [x] Limit collision envelopes to normal node bodies and joiner circles; attached tails/stems remain arrows.
+- [x] Show a temporary invalid outline during an overlapping drag, then restore the exact pre-drag position on release.
+- [x] Preserve surrounding text when editing in the middle; keep the longest valid inserted beginning.
+- [x] Confirm the short feedback message shown when label growth is blocked by an interaction-envelope collision: “No room for more text.”
+- [x] Write the complete approved design in `COLLISION_IMPLEMENTATION_CONTRACT.md`.
+- [x] Receive the final contract approval message before editing application code.
+- [x] Implement only after the final contract approval gate is passed.
+- [x] Re-read architect, recover, review, imprint, remember, and static-web skills before implementation.
+- [x] Add shared shape-aware collision geometry without changing arrow routing semantics.
+- [x] Convert Add Node to one-shot tap-to-place with rejection and manual reactivation.
+- [x] Add joiner-on-eligible-arrow exception while keeping node/joiner envelope collision protection.
+- [x] Add label resizing, longest-valid input rejection, and clean label history behavior.
+- [x] Add invalid drag preview and exact pre-drag restoration.
+- [x] Run TypeScript, production build, browser regression, review, imprint, GitHub sync, and checkpoint verification.

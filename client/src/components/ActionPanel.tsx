@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { VIBGYOR_COLORS, NodeColor, COLOR_ORDER, TreeMap, NodeData, MAX_LABEL_LENGTH } from "@/lib/treeData";
 import type { RoadmapAction } from "@/contexts/RoadmapContext";
+import { labelFits } from "@/lib/collision";
 import { Palette, Type, Trash2, X, Check } from "lucide-react";
 
 type PanelTarget =
@@ -56,7 +57,7 @@ export default function ActionPanel({ x, y, target, tree, dispatch, onClose }: A
         <MenuButton icon={<Trash2 className="w-4 h-4" />} label={`Remove ${target.type === "node" ? (isJoiner ? "Joiner" : "Node") : "Arrow"}`} danger onClick={remove} />
       </div>}
       {mode === "editColor" && <div className="p-3"><div className="flex flex-wrap gap-2.5 justify-center">{COLOR_ORDER.map((color) => <button key={color} className="w-8 h-8 rounded-full transition-transform hover:scale-110 active:scale-90 border border-transparent hover:border-white/40" style={{ backgroundColor: VIBGYOR_COLORS[color], boxShadow: `0 0 8px ${VIBGYOR_COLORS[color]}55` }} onClick={() => changeColor(color)} title={color} />)}</div><button onClick={() => setMode("menu")} className="mt-3 w-full text-[#8a8a95] text-xs text-center hover:text-[#e4e4e7]">← Back</button></div>}
-      {mode === "editName" && target.type === "node" && <NameEditor node={tree.nodeMap[target.nodeId]} onSave={saveLabel} onCancel={() => setMode("menu")} />}
+      {mode === "editName" && target.type === "node" && <NameEditor node={tree.nodeMap[target.nodeId]} tree={tree} onSave={saveLabel} onCancel={() => setMode("menu")} />}
     </div>
   </div>;
 }
@@ -65,10 +66,41 @@ function MenuButton({ icon, label, onClick, danger }: { icon: React.ReactNode; l
   return <button onClick={onClick} className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-sans transition-colors ${danger ? "text-[#ef4444] hover:bg-[#ef4444]/10" : "text-[#c4c4cc] hover:bg-[#1e1e2a]"}`}>{icon}<span>{label}</span></button>;
 }
 
-function NameEditor({ node, onSave, onCancel }: { node: NodeData | undefined; onSave: (label: string) => void; onCancel: () => void }) {
+function NameEditor({ node, tree, onSave, onCancel }: { node: NodeData | undefined; tree: TreeMap; onSave: (label: string) => void; onCancel: () => void }) {
   const [value, setValue] = useState(node?.label ?? "");
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [blocked, setBlocked] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { inputRef.current?.focus(); }, []);
   const remaining = MAX_LABEL_LENGTH - value.length;
-  return <div className="p-3"><div className="relative"><input ref={inputRef} type="text" value={value} onChange={(e) => setValue(e.target.value.slice(0, MAX_LABEL_LENGTH))} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onSave(value); } if (e.key === "Escape") onCancel(); }} placeholder="Type label..." className="w-full bg-[#0a0a0f] border border-[#2a2a35] rounded-md px-3 py-2 text-[#e4e4e7] text-sm font-sans outline-none focus:border-[#3B82F6]" /><span className={`absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-mono ${remaining <= 5 ? "text-[#ef4444]" : "text-[#5a5a65]"}`}>{remaining}</span></div><div className="flex gap-2 mt-3"><button onClick={() => onSave(value)} className="flex-1 flex items-center justify-center gap-1.5 bg-[#3B82F6] hover:bg-[#2563eb] text-white text-xs font-medium rounded-md py-2 active:scale-95"><Check className="w-3.5 h-3.5" />Save</button><button onClick={onCancel} className="flex-1 bg-[#1e1e2a] hover:bg-[#2a2a35] text-[#c4c4cc] text-xs rounded-md py-2 active:scale-95">Cancel</button></div></div>;
+  function acceptInput(nextValue: string) {
+    if (!node) return;
+    if (nextValue.length <= MAX_LABEL_LENGTH && labelFits(tree, { ...node, label: nextValue }, nextValue)) {
+      setValue(nextValue);
+      setBlocked(false);
+      return;
+    }
+
+    let prefixLength = 0;
+    while (prefixLength < value.length && prefixLength < nextValue.length && value[prefixLength] === nextValue[prefixLength]) prefixLength += 1;
+    let oldSuffixStart = value.length;
+    let nextSuffixStart = nextValue.length;
+    while (oldSuffixStart > prefixLength && nextSuffixStart > prefixLength && value[oldSuffixStart - 1] === nextValue[nextSuffixStart - 1]) {
+      oldSuffixStart -= 1;
+      nextSuffixStart -= 1;
+    }
+    const inserted = nextValue.slice(prefixLength, nextSuffixStart);
+    const before = value.slice(0, prefixLength);
+    const after = value.slice(oldSuffixStart);
+    let acceptedInserted = "";
+    for (const character of inserted) {
+      const candidate = before + acceptedInserted + character + after;
+      if (candidate.length > MAX_LABEL_LENGTH || !labelFits(tree, { ...node, label: candidate }, candidate)) break;
+      acceptedInserted += character;
+    }
+    const accepted = before + acceptedInserted + after;
+    if (accepted !== nextValue) setBlocked(true);
+    setValue(accepted);
+  }
+
+  return <div className="p-3"><div className="relative"><textarea ref={inputRef} rows={3} value={value} onChange={(e) => acceptInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSave(value); } if (e.key === "Escape") onCancel(); }} placeholder="Type label..." className="w-full resize-none bg-[#0a0a0f] border border-[#2a2a35] rounded-md px-3 py-2 pr-10 text-[#e4e4e7] text-sm font-sans outline-none focus:border-[#3B82F6]" /><span className={`absolute right-2 top-2 text-[10px] font-mono ${remaining <= 5 ? "text-[#ef4444]" : "text-[#5a5a65]"}`}>{remaining}</span></div>{blocked && <p className="mt-1 text-[11px] text-[#ef4444]" aria-live="polite">No room for more text</p>}<div className="flex gap-2 mt-3"><button onClick={() => onSave(value)} className="flex-1 flex items-center justify-center gap-1.5 bg-[#3B82F6] hover:bg-[#2563eb] text-white text-xs font-medium rounded-md py-2 active:scale-95"><Check className="w-3.5 h-3.5" />Save</button><button onClick={onCancel} className="flex-1 bg-[#1e1e2a] hover:bg-[#2a2a35] text-[#c4c4cc] text-xs rounded-md py-2 active:scale-95">Cancel</button></div></div>;
 }
