@@ -115,3 +115,120 @@
 - [x] Add label resizing, longest-valid input rejection, and clean label history behavior.
 - [x] Add invalid drag preview and exact pre-drag restoration.
 - [x] Run TypeScript, production build, browser regression, review, imprint, GitHub sync, and checkpoint verification.
+
+## Arrow-stage review handoff
+
+- [ ] Record the missing-arrowhead issue shown in the user’s supplied image and reproduce it before choosing a geometry fix.
+- [ ] Define the intended multi-headed result after removing a joiner, distinguishing it from ordinary arrows that share a path.
+- [ ] Define stable branch-segment behavior so moving a connected node changes only the affected arrow while the other tail remains anchored at the joiner.
+- [ ] Prevent arrow segments from overlapping; allow them to approach while preserving separate lanes, and restore a dragged node when its committed routes cannot remain separated.
+- [ ] Treat tails from multiple arrows into the same node and parallel segments of the same arrow as routing obstacles to one another.
+- [ ] Preserve perpendicular crossings with bridge arches rather than flattening or overlapping the crossing routes.
+- [ ] Resolve all arrow semantics and remaining questions before writing the implementation contract.
+- [ ] Receive approval for the arrow implementation contract before editing application code.
+- [ ] Implement robust arrowhead placement, stable split-segment anchoring, lane separation, self-obstacle routing, and bridge crossings without regressing collision or joiner behavior.
+- [ ] Run TypeScript, production build, browser regression, imprint/review, GitHub synchronization, and WebDev checkpoint verification for the arrow milestone.
+- [x] Confirm the preferred multi-branch design: separate directed arrows with distinct lanes, not one visually bundled multi-headed arrow.
+- [x] Confirm normal-node arrowheads must terminate at the target boundary with enough final-segment length to remain visible; joiner targets still have no arrowheads.
+- [x] Use the existing 12-unit gap as the first branch-lane spacing trial.
+- [x] Try the opposite route side during a node drag when the current side would overlap arrow lanes; restore the pre-drag position if neither side is valid.
+- [x] Treat every other arrow segment, including parallel segments from the same joint, as an obstacle while routing; ignore only the route currently being calculated.
+- [x] Preserve bridge arches only for true interior horizontal–vertical crossings, not endpoint or joint contacts.
+- [x] Reject a node movement when no clean orthogonal route remains rather than permitting arrow overlap.
+- [x] Record the performance plan: direct-route fast path, limited lane candidates, cached derived routes, requestAnimationFrame drag updates, and no route data stored in history.
+- [x] Write and receive approval for the complete arrow implementation contract before editing application code.
+- [ ] Implement arrow changes behind focused derived-route helpers so the reducer and graph data model remain stable.
+- [ ] Protect direct aligned routes, orthogonal fallback routing, reverse lanes, joiner split metadata, collision envelopes, and tablet pointer thresholds during implementation.
+- [ ] Verify all four arrowhead directions, joiner-target suppression, branch-lane separation, arrow-segment obstacles, opposite-side drag recovery, failed-route restoration, and true crossing bridges.
+- [ ] Re-run TypeScript, production build, browser console, performance-oriented drag checks, imprint/review, GitHub synchronization, and WebDev checkpoint verification.
+
+## Post-arrow-stage issue review — user trial findings
+
+- [ ] Investigate why removing a joiner or ordinary node restores tails to the original node instead of preserving the intended separate directed-arrow structure.
+- [ ] Decide whether the current anti-overlap routing is incorrectly limiting the number of arrows that may terminate at or leave a node.
+- [ ] Investigate opposite-direction A→B and A←B routing when both arrows bend into each other; define a visibly separated lane rule.
+- [ ] Investigate routes that cross through a node while travelling toward an upper-side endpoint; enforce node-boundary-safe routing.
+- [ ] Explain proposed behavior for all four findings and receive user approval before editing code.
+- [ ] Preserve the user's intended geometry: same-axis node pairs use a straight perpendicular route; corner placements use one clean 90-degree bend when clear.
+- [ ] Reassess the interaction envelope size: visible node and joiner shapes should be the default collision area, with no extra spacing that prevents close-but-non-overlapping placement.
+- [ ] Compare designated point/port slots against automatic perimeter fan-out lanes for multiple arrows.
+- [ ] Select a stable automatic port-and-lane design that allows many close arrows without overlap, random lane swapping, or a hidden arrow-count limit.
+- [ ] Receive user approval for the selected routing and interaction-envelope design before implementation.
+- [x] Clarify that the differently colored lines in the sketch illustrate two possible shortest route choices, not parallel stored graph edges.
+- [x] Preserve the one-arrow-per-direction rule between any two nodes; use the routing system to choose one actual route for each real connection.
+- [ ] Discuss the user’s illustrated alignment and route-choice ideas before proposing implementation details.
+- [ ] Evaluate the central-axis straight-line idea, the corner one-bend idea, and the designated point/port idea separately.
+- [ ] Ask for confirmation after each unclear visual behavior rather than combining decisions.
+- [ ] Treat the third sketch (designated attachment points) and fourth sketch (many close parallel attachments) as separate ideas.
+- [ ] Compare each sketch independently against the current node-and-arrow model.
+- [ ] Propose one or two additional routing ideas and explain their tradeoffs before recommending a design.
+- [ ] Create an explanatory diagram showing the proposed short stems, separated fan-out lanes, node boundary, and arrow directions for user review.
+- [ ] Do not treat the explanatory diagram as approval to implement the routing design.
+- [ ] Revise the diagram so repeated arrows from one source to the same target are removed; one source-target pair has one real arrow.
+- [ ] Show joiner-like branching as separate arrows from one junction toward different target nodes.
+- [ ] Show node dimensions as customizable independently from the amount of label text.
+- [ ] Review the post-deletion branching sketch as the intended visual result, not as a request for an added visible joiner.
+- [x] Record that the branching shape in the sketch never appeared in the app; it is the desired post-deletion result to design toward.
+- [ ] Identify which earlier decisions were necessary requirements and which were implementation choices that may be replaceable.
+- [ ] Compare visible joiners, invisible routing junctions, and hybrid approaches for branch density, movement, deletion, and selection behavior.
+- [ ] Evaluate a movable line-segment junction that accepts arrow attachments anywhere along its length, including its selection, movement, deletion, overlap, and routing behavior.
+- [ ] Compare a perimeter line around every node with a line-junction object and with ordinary route segments that can expose movable 90-degree corner controls.
+- [ ] Decide whether junction attachment surfaces are explicit user-created objects, derived routing geometry, or a controlled hybrid before revising the branch contract.
+- [ ] Evaluate whether a line junction should be movable while carrying its attached arrows and whether attachment positions remain stable during movement.
+- [ ] Evaluate a perimeter attachment surface around every node as a possible dense-connection mechanism, including whether it should be visible or only interactive.
+- [ ] Evaluate whether ordinary horizontal/vertical route segments should become junction surfaces and whether their 90-degree corners should be movable controls.
+- [ ] Do not change code until the retrospective architecture is approved.
+- [ ] Audit the earlier decisions and state which ones were user requirements, which were good implementation choices, and which were unnecessary overengineering.
+- [ ] Treat the visible joiner direction as paused and do not extend it into the next attachable-arrow architecture without a fresh contract.
+- [ ] Define customizable node width and height as a fundamental feature independent of label length.
+- [ ] Decide how node resizing works on an Android tablet, including controls, minimum/maximum dimensions, label fitting, arrow re-routing, collision handling, and undo/redo.
+- [ ] Receive approval for the customizable-node-size contract before editing application code.
+- [ ] Revisit attachable arrows from first principles after node sizing is implemented and verified.
+- [ ] Normalize the seven proposed fundamentals into a foundation contract, correcting item 6 to refer to non-overlapping arrow segments.
+- [ ] Confirm the essential missing graph rules: self-loop behavior, reverse-direction arrows, node deletion behavior, and whether every user action is undoable and locally persistent.
+- [ ] Confirm that “shortest possible root” means the shortest clear orthogonal route, with node bodies and same-orientation arrow segments as obstacles.
+- [ ] Receive approval for the foundation contract before implementation.
+- [ ] Add the deletion-cleanup fundamental: removing a node with only incoming or only outgoing arrows automatically removes those connected arrows.
+- [ ] Record stem-and-fan reconnection after deletion as the next phase after fundamentals, not as a foundation rule to implement now.
+- [ ] Add tablet navigation fundamentals: zoom in, zoom out, and home/reset view controls using both visible buttons and pinch/touch gestures where appropriate.
+- [ ] Define home-view behavior separately from roadmap reset: home returns the viewport to a readable canvas position without deleting or changing roadmap data.
+- [ ] Replace word-limit preview behavior with a short-tap full-context popup or side panel containing Edit Text and Close controls.
+- [ ] Keep Edit Label available from the long-press action menu, and keep Resize as a separate long-press action.
+- [ ] Remove the label word limit while preserving explicit node width and height; label editing must not automatically resize the node.
+- [ ] Confirm popup placement, dismissal, long-label wrapping, and whether Edit Text reuses the existing label editor.
+- [ ] Confirm resize completion, side-drag behavior, collision rejection, and rerouting after a node size change.
+- [ ] Remove node-box resizing from the current foundation trial; preserve it for a later phase.
+- [ ] Make short tap open a centered popup with an X close button and an Edit Text button.
+- [ ] Make the entire popup document editable in place, with unlimited text and vertical scrolling as content grows.
+- [ ] Show the node’s current short heading in the popup’s top-left header; do not duplicate the heading as document text.
+- [ ] Use an explicit Save button for popup document edits.
+- [ ] If X is pressed during popup editing, offer “Save changes” or “Discard changes.”
+- [ ] If another node is tapped during popup editing, offer the same Save/Discard choice before switching popups.
+- [ ] Keep popup documents as plain text with line breaks only for this trial.
+- [ ] Start new nodes with an empty heading and an empty popup document.
+- [ ] Allow only one popup at a time; tapping another node replaces the current popup with that node’s popup.
+- [ ] Keep popup text out of the main roadmap Undo/Redo history; popup editing uses a local editor history for the current editing session.
+- [ ] Confirm removal when a node containing popup data would be removed, whether removal is deliberate or caused by Undo; empty-data node removal follows the ordinary action flow.
+- [ ] Display a UI-only “Untitled node” placeholder in the popup header when the saved heading is empty; do not store the placeholder as heading data.
+- [ ] Show a “No notes yet” hint for an empty popup document without storing hint text in the document.
+- [ ] Reject saving an empty heading from Edit Label; a heading must contain at least one character.
+- [ ] Keep node appearance and size fixed in this trial; do not resize from heading or popup content.
+- [ ] Keep long-press Edit Label for the short heading shown on the node; do not use the old word-limit preview behavior.
+- [ ] Defer font/letter-size resizing to a later phase; do not add a label-size slider now.
+- [ ] Confirm popup editing history, dismissal behavior, heading preview behavior, and the distinction between node heading and popup document.
+
+## Foundation-only implementation and delivery — 2026-08-14
+
+- [x] Receive explicit user approval for `FOUNDATION_CONTRACT.md`.
+- [x] Remove joiner types, split-arrow metadata, joiner reducer actions, joiner rendering, Add Joiner mode, joiner hit targets, and the old label limit.
+- [x] Add separate persisted `popupContent` to ordinary nodes and keep popup-document updates outside main roadmap Undo/Redo history.
+- [x] Preserve atomic graph history, direct-bypass deletion, one-sided deletion cleanup, reverse arrows, bridge crossings, collision-safe placement, persistence, reset, pan, zoom, pinch, and Home fit-to-content.
+- [x] Add centered single-node popup with heading header, plain unlimited text, empty-document hint, inline Edit Text, explicit Save, X-only clean close, and Save/Discard prompts for unsaved close or switching.
+- [x] Keep empty new headings and empty popup documents on creation; reject saving an empty heading; display UI-only `Untitled node` when needed.
+- [x] Keep long-press Edit Label, Recolor, Remove, and deferred Resize placeholder; keep node appearance fixed and defer node resizing and font-size controls.
+- [x] Verify ordinary-node deletion and Undo independently, then verify clean data-bearing Remove → Undo → Redo confirmation → Undo restoration after Reset/reload.
+- [x] Classify the earlier zero-node Undo result as polluted browser test history rather than a reproducible reducer defect; record evidence in `foundation-browser-check.md`.
+- [x] Run TypeScript checking, production build, removed-feature scan, browser verification, review, and imprint documentation.
+- [ ] Synchronize changed live source and approved durable documents to `/home/ubuntu/roamaps`, commit, and push to `main`.
+- [ ] Save the final WebDev checkpoint before delivering the foundation trial.
+- [ ] Deliver the clickable live trial and concise numbered Android-tablet testing tasks.

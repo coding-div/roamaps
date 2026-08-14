@@ -3,8 +3,8 @@
  * Multi-level tree with proper branching — each node can have its own children.
  * Tree 1: up to 3 levels deep
  * Tree 2: up to 8 levels deep
- * Phase 2: Added independent arrow colors, editable node labels (max 50 chars),
- *           and arrow edge metadata.
+ * Foundation reset: ordinary directed arrows, short node headings, and
+ * separate unlimited popup documents. The graph stays flat and explicit.
  */
 
 export type NodeColor =
@@ -17,8 +17,6 @@ export type NodeColor =
   | "red"
   | "black"
   | "white";
-
-export type NodeKind = "node" | "joiner";
 
 export const VIBGYOR_COLORS: Record<NodeColor, string> = {
   violet: "#8B5CF6",
@@ -34,8 +32,6 @@ export const VIBGYOR_COLORS: Record<NodeColor, string> = {
 
 export const COLOR_ORDER: NodeColor[] = ["violet", "indigo", "blue", "green", "yellow", "orange", "red", "black", "white"];
 
-export const MAX_LABEL_LENGTH = 50;
-
 export type Direction = "up" | "down" | "left" | "right";
 
 export interface NodeData {
@@ -44,8 +40,8 @@ export interface NodeData {
   y: number;
   label: string;
   color: NodeColor;
-  /** Optional for backwards compatibility with older localStorage snapshots. */
-  kind?: NodeKind;
+  /** Unlimited plain-text document shown in the centered node popup. */
+  popupContent?: string;
   children: ChildRef[];
 }
 
@@ -53,8 +49,6 @@ export interface ChildRef {
   targetId: string;
   /** Independent color for this specific arrow/edge */
   color: NodeColor;
-  /** Set on the two segments created by splitting an arrow with a joiner. */
-  splitJoinerId?: string;
 }
 
 export interface TreeMap {

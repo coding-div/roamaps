@@ -9,9 +9,8 @@ import {
   type NodeColor,
   type NodeData,
   type TreeMap,
-  MAX_LABEL_LENGTH,
 } from "@/lib/treeData";
-import { canPlaceNode, labelFits } from "@/lib/collision";
+import { canPlaceNode } from "@/lib/collision";
 
 const STORAGE_KEY = "roamaps-roadmaps-v1";
 const MAX_HISTORY = 60;
@@ -19,14 +18,12 @@ const MAX_HISTORY = 60;
 export type RoadmapAction =
   | { type: "ADD_TREE"; tree: TreeMap }
   | { type: "ADD_NODE"; treeId: string; node: NodeData }
-  | { type: "ADD_JOINER"; treeId: string; node: NodeData }
   | { type: "REMOVE_NODE"; treeId: string; nodeId: string }
   | { type: "MOVE_NODE"; treeId: string; nodeId: string; x: number; y: number }
   | { type: "UPDATE_LABEL"; treeId: string; nodeId: string; label: string }
+  | { type: "UPDATE_POPUP_CONTENT"; treeId: string; nodeId: string; content: string }
   | { type: "UPDATE_NODE_COLOR"; treeId: string; nodeId: string; color: NodeColor }
   | { type: "ADD_ARROW"; treeId: string; sourceId: string; targetId: string; color: NodeColor }
-  | { type: "SPLIT_ARROW"; treeId: string; sourceId: string; targetId: string; joinerId: string }
-  | { type: "PLACE_JOINER_ON_ARROW"; treeId: string; sourceId: string; targetId: string; node: NodeData }
   | { type: "REMOVE_ARROW"; treeId: string; sourceId: string; targetId: string }
   | { type: "UPDATE_ARROW_COLOR"; treeId: string; sourceId: string; targetId: string; color: NodeColor }
   | { type: "UNDO" }
@@ -60,6 +57,13 @@ function cloneTree(tree: TreeMap): TreeMap {
 
 function sameTrees(a: TreeMap[], b: TreeMap[]): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function popupDataWouldBeRemoved(current: TreeMap[], next: TreeMap[]): boolean {
+  return current.some((tree) => {
+    const nextTree = next.find((candidate) => candidate.id === tree.id);
+    return Object.values(tree.nodeMap).some((node) => Boolean((node.popupContent ?? "").trim()) && !nextTree?.nodeMap[node.id]);
+  });
 }
 
 function commitEdit(state: HistoryState, nextTrees: TreeMap[]): HistoryState {
@@ -108,11 +112,7 @@ function applyContentAction(trees: TreeMap[], action: TreeContentAction): TreeMa
     switch (action.type) {
       case "ADD_NODE":
         if (nodeMap[action.node.id] || !canPlaceNode(action.node, Object.values(nodeMap), tree.root?.id ?? null)) return tree;
-        nodeMap[action.node.id] = { ...action.node, kind: "node", children: [] };
-        return { ...tree, nodeMap };
-      case "ADD_JOINER":
-        if (nodeMap[action.node.id] || !canPlaceNode(action.node, Object.values(nodeMap), tree.root?.id ?? null)) return tree;
-        nodeMap[action.node.id] = { ...action.node, kind: "joiner", label: "", children: [] };
+        nodeMap[action.node.id] = { ...action.node, popupContent: action.node.popupContent ?? "", children: [] };
         return { ...tree, nodeMap };
       case "REMOVE_NODE": {
         const removed = nodeMap[action.nodeId];
@@ -155,9 +155,14 @@ function applyContentAction(trees: TreeMap[], action: TreeContentAction): TreeMa
       case "UPDATE_LABEL": {
         const node = nodeMap[action.nodeId];
         if (!node) return tree;
-        const label = action.label.slice(0, MAX_LABEL_LENGTH);
-        if (!labelFits(tree, node, label)) return tree;
-        node.label = label;
+        if (action.label.trim() === "") return tree;
+        node.label = action.label;
+        return syncRoot(tree, nodeMap);
+      }
+      case "UPDATE_POPUP_CONTENT": {
+        const node = nodeMap[action.nodeId];
+        if (!node || (node.popupContent ?? "") === action.content) return tree;
+        node.popupContent = action.content;
         return syncRoot(tree, nodeMap);
       }
       case "UPDATE_NODE_COLOR": {
@@ -171,33 +176,6 @@ function applyContentAction(trees: TreeMap[], action: TreeContentAction): TreeMa
         if (!source || !nodeMap[action.targetId] || action.sourceId === action.targetId) return tree;
         if (source.children.some((child) => child.targetId === action.targetId)) return tree;
         source.children = [...source.children, { targetId: action.targetId, color: action.color }];
-        return syncRoot(tree, nodeMap);
-      }
-      case "SPLIT_ARROW": {
-        const source = nodeMap[action.sourceId];
-        const target = nodeMap[action.targetId];
-        const joiner = nodeMap[action.joinerId];
-        if (!source || !target || !joiner || action.sourceId === action.targetId || action.sourceId === action.joinerId || action.targetId === action.joinerId) return tree;
-        const original = source.children.find((child) => child.targetId === action.targetId);
-        if (!original || source.children.some((child) => child.targetId === action.joinerId) || joiner.children.some((child) => child.targetId === action.targetId)) return tree;
-        source.children = source.children.map((child) => child.targetId === action.targetId
-          ? { ...child, targetId: action.joinerId, splitJoinerId: action.joinerId }
-          : child);
-        joiner.children = [...joiner.children, { targetId: action.targetId, color: original.color, splitJoinerId: action.joinerId }];
-        return syncRoot(tree, nodeMap);
-      }
-      case "PLACE_JOINER_ON_ARROW": {
-        const source = nodeMap[action.sourceId];
-        const target = nodeMap[action.targetId];
-        if (!source || !target || nodeMap[action.node.id] || action.sourceId === action.targetId || action.sourceId === action.node.id || action.targetId === action.node.id) return tree;
-        const original = source.children.find((child) => child.targetId === action.targetId);
-        if (!original) return tree;
-        if (!canPlaceNode(action.node, Object.values(nodeMap), tree.root?.id ?? null)) return tree;
-        nodeMap[action.node.id] = { ...action.node, kind: "joiner", label: "", children: [] };
-        source.children = source.children.map((child) => child.targetId === action.targetId
-          ? { ...child, targetId: action.node.id, splitJoinerId: action.node.id }
-          : child);
-        nodeMap[action.node.id].children = [{ targetId: action.targetId, color: original.color, splitJoinerId: action.node.id }];
         return syncRoot(tree, nodeMap);
       }
       case "REMOVE_ARROW": {
@@ -252,6 +230,12 @@ function historyReducer(state: HistoryState, action: RoadmapAction): HistoryStat
     return commitEdit(state, [...state.present, cloneTree(action.tree)]);
   }
   if (!("treeId" in action)) return state;
+  if (action.type === "UPDATE_POPUP_CONTENT") {
+    const nextPresent = applyContentAction(state.present, action);
+    if (sameTrees(state.present, nextPresent)) return state;
+    const updateSnapshots = (snapshots: TreeMap[][]) => snapshots.map((trees) => applyContentAction(trees, action));
+    return { present: nextPresent, past: updateSnapshots(state.past), future: updateSnapshots(state.future) };
+  }
   return commitEdit(state, applyContentAction(state.present, action));
 }
 
@@ -261,6 +245,9 @@ interface RoadmapContextValue {
   getTree: (treeId: string) => TreeMap | undefined;
   canUndo: boolean;
   canRedo: boolean;
+  undoRequiresConfirmation: boolean;
+  redoRequiresConfirmation: boolean;
+  resetRequiresConfirmation: boolean;
 }
 
 const RoadmapContext = createContext<RoadmapContextValue | null>(null);
@@ -271,14 +258,19 @@ function loadInitialState(): HistoryState {
     if (saved) {
       const parsed = JSON.parse(saved) as TreeMap[];
       if (Array.isArray(parsed)) {
-        const normalized = parsed.map((tree) => ({
-          ...tree,
-          nodeMap: Object.fromEntries(Object.entries(tree.nodeMap ?? {}).map(([id, node]) => [id, {
+        const normalized = parsed.map((tree) => {
+          const rawEntries = Object.entries(tree.nodeMap ?? {}).filter(([, node]) => !Object.prototype.hasOwnProperty.call(node, "kind"));
+          const validIds = new Set(rawEntries.map(([id]) => id));
+          const nodeMap = Object.fromEntries(rawEntries.map(([id, node]) => [id, {
             ...node,
-            kind: node.kind ?? "node",
-            children: (node.children ?? []).map((child) => ({ ...child })),
-          }])),
-        }));
+            popupContent: node.popupContent ?? "",
+            children: (node.children ?? [])
+              .filter((child) => validIds.has(child.targetId))
+              .map((child) => ({ targetId: child.targetId, color: child.color })),
+          }])) as Record<string, NodeData>;
+          const rootId = tree.root?.id;
+          return { ...tree, root: rootId ? nodeMap[rootId] ?? null : null, nodeMap };
+        });
         return { present: normalized, past: [], future: [] };
       }
     }
@@ -306,6 +298,9 @@ export function RoadmapProvider({ children }: { children: ReactNode }) {
       getTree: (treeId: string) => state.present.find((tree) => tree.id === treeId),
       canUndo: state.past.length > 0,
       canRedo: state.future.length > 0,
+      undoRequiresConfirmation: Boolean(state.past.length && popupDataWouldBeRemoved(state.present, state.past[state.past.length - 1])),
+      redoRequiresConfirmation: Boolean(state.future.length && popupDataWouldBeRemoved(state.present, state.future[0])),
+      resetRequiresConfirmation: popupDataWouldBeRemoved(state.present, allTrees),
     }),
     [state]
   );

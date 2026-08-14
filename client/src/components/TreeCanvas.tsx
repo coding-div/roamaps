@@ -18,16 +18,15 @@ import {
   getBoxDimensions,
   getNodeBox,
   getNodeEnvelope,
-  isJoinerNode,
   NODE_RADIUS,
-  JOINER_RADIUS,
   type Box,
   type Point,
 } from "@/lib/collision";
 import { useRoadmaps } from "@/contexts/RoadmapContext";
 import { toast } from "sonner";
-import { CircleDot, Home, Link2, Minus, MousePointer2, Plus, Redo2, RotateCcw, Undo2 } from "lucide-react";
+import { Home, Link2, Minus, MousePointer2, Plus, Redo2, RotateCcw, Undo2 } from "lucide-react";
 import ActionPanel from "./ActionPanel";
+import NodePopup from "./NodePopup";
 
 interface TreeCanvasProps {
   tree: TreeMap;
@@ -43,9 +42,7 @@ const ARROW_LENGTH = 9;
 const ARROW_WIDTH = 5;
 const MIN_ARROW_SEGMENT = ARROW_LENGTH + 6;
 const ARROW_PRESS_MOVE_THRESHOLD = 10;
-const JOINER_LANE_GAP = 12;
-const JOINER_MIN_SEGMENT = 64;
-const JOINER_ENDPOINT_MARGIN = 24;
+const LANE_GAP = 12;
 
 interface ViewBox { x: number; y: number; w: number; h: number }
 interface Segment { a: Point; b: Point }
@@ -53,7 +50,7 @@ interface Route { points: Point[]; path: string; targetDirection: Direction; mid
 interface DragState { nodeId: string; pointerId: number; startX: number; startY: number; moved: boolean; x: number; y: number }
 interface ArrowPressState { pointerId: number; startX: number; startY: number }
 interface DragPreview { nodeId: string; x: number; y: number; valid: boolean }
-interface PlacementPreview { kind: "node" | "joiner"; x: number; y: number; valid: boolean }
+interface PlacementPreview { x: number; y: number; valid: boolean }
 type PanelTarget = { type: "node"; nodeId: string } | { type: "arrow"; sourceId: string; targetId: string };
 
 function DotGrid() {
@@ -64,6 +61,13 @@ function DotGrid() {
       </pattern>
     </defs>
   );
+}
+
+function truncateHeading(label: string, boxWidth: number, isRoot: boolean): string {
+  const normalized = label.replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  const maxChars = Math.max(3, Math.floor((boxWidth - 20) / (isRoot ? 8 : CHAR_WIDTH)));
+  return normalized.length > maxChars ? `${normalized.slice(0, Math.max(1, maxChars - 1))}…` : normalized;
 }
 
 function getPort(node: NodeData, box: Box, direction: Direction): Point {
@@ -91,7 +95,7 @@ function overlapLength(a1: number, a2: number, b1: number, b2: number): number {
   return Math.min(Math.max(a1, a2), Math.max(b1, b2)) - Math.max(Math.min(a1, a2), Math.min(b1, b2));
 }
 
-function parallelSegmentConflict(a: Segment, b: Segment, padding = JOINER_LANE_GAP / 2): boolean {
+function parallelSegmentConflict(a: Segment, b: Segment, padding = LANE_GAP / 2): boolean {
   if (isHorizontal(a) !== isHorizontal(b)) return false;
   if (isHorizontal(a)) return Math.abs(a.a.y - b.a.y) <= padding && overlapLength(a.a.x, a.b.x, b.a.x, b.b.x) > 0;
   return Math.abs(a.a.x - b.a.x) <= padding && overlapLength(a.a.y, a.b.y, b.a.y, b.b.y) > 0;
@@ -176,7 +180,7 @@ function getReverseLane(source: NodeData, target: NodeData, allEdges: Array<{ so
   const dx = target.x - source.x;
   const dy = target.y - source.y;
   const length = Math.hypot(dx, dy) || 1;
-  return { x: (-dy / length) * JOINER_LANE_GAP * sign, y: (dx / length) * JOINER_LANE_GAP * sign };
+  return { x: (-dy / length) * LANE_GAP * sign, y: (dx / length) * LANE_GAP * sign };
 }
 
 function applyReverseLane(route: Route, source: NodeData, target: NodeData, sourceBox: Box, targetBox: Box, lane: Point): Route {
@@ -187,14 +191,14 @@ function applyReverseLane(route: Route, source: NodeData, target: NodeData, sour
     const direction: Direction = lane.y < 0 ? "up" : "down";
     const start = getPort(source, sourceBox, direction);
     const end = getPort(target, targetBox, direction);
-    const laneY = source.y + (direction === "up" ? -(Math.max(sourceBox.h, targetBox.h) / 2 + ROUTE_CLEARANCE + JOINER_LANE_GAP) : Math.max(sourceBox.h, targetBox.h) / 2 + ROUTE_CLEARANCE + JOINER_LANE_GAP);
+    const laneY = source.y + (direction === "up" ? -(Math.max(sourceBox.h, targetBox.h) / 2 + ROUTE_CLEARANCE + LANE_GAP) : Math.max(sourceBox.h, targetBox.h) / 2 + ROUTE_CLEARANCE + LANE_GAP);
     return routeFromPoints([start, { x: start.x, y: laneY }, { x: end.x, y: laneY }, end], direction, route.clean);
   }
   if (alignedVertical) {
     const direction: Direction = lane.x < 0 ? "left" : "right";
     const start = getPort(source, sourceBox, direction);
     const end = getPort(target, targetBox, direction);
-    const laneX = source.x + (direction === "left" ? -(Math.max(sourceBox.w, targetBox.w) / 2 + ROUTE_CLEARANCE + JOINER_LANE_GAP) : Math.max(sourceBox.w, targetBox.w) / 2 + ROUTE_CLEARANCE + JOINER_LANE_GAP);
+    const laneX = source.x + (direction === "left" ? -(Math.max(sourceBox.w, targetBox.w) / 2 + ROUTE_CLEARANCE + LANE_GAP) : Math.max(sourceBox.w, targetBox.w) / 2 + ROUTE_CLEARANCE + LANE_GAP);
     return routeFromPoints([start, { x: laneX, y: start.y }, { x: laneX, y: end.y }, end], direction, route.clean);
   }
   return route;
@@ -347,7 +351,7 @@ function buildDerivedRoutes(tree: TreeMap, override?: { nodeId: string; x: numbe
     const targetNode = positionOf(target);
     const sourceBox = boxes.get(source.id)!;
     const targetBox = boxes.get(target.id)!;
-    const obstacleBoxes = displayNodes.filter((node) => node.id !== source.id && node.id !== target.id && !isJoinerNode(node)).map((node) => boxes.get(node.id)!);
+    const obstacleBoxes = displayNodes.filter((node) => node.id !== source.id && node.id !== target.id).map((node) => boxes.get(node.id)!);
     const reverseKey = `${target.id}->${source.id}`;
     const arrowObstacles = reservedRoutes.filter((entry) => entry.key !== reverseKey).flatMap((entry) => entry.segments);
     const key = `${source.id}->${target.id}`;
@@ -368,12 +372,11 @@ function buildDerivedRoutes(tree: TreeMap, override?: { nodeId: string; x: numbe
 }
 
 export default function TreeCanvas({ tree }: TreeCanvasProps) {
-  const { dispatch, canUndo, canRedo } = useRoadmaps();
+  const { dispatch, canUndo, canRedo, undoRequiresConfirmation, redoRequiresConfirmation, resetRequiresConfirmation } = useRoadmaps();
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [addNodeMode, setAddNodeMode] = useState(false);
   const [connectMode, setConnectMode] = useState(false);
-  const [joinerMode, setJoinerMode] = useState(false);
   const [connectSourceId, setConnectSourceId] = useState<string | null>(null);
   const [dragPosition, setDragPosition] = useState<DragPreview | null>(null);
   const [placementPreview, setPlacementPreview] = useState<PlacementPreview | null>(null);
@@ -388,6 +391,8 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const isPinching = useRef(false);
   const [actionPanelTarget, setActionPanelTarget] = useState<PanelTarget | null>(null);
   const [actionPanelScreenPos, setActionPanelScreenPos] = useState({ x: 0, y: 0 });
+  const [popupNodeId, setPopupNodeId] = useState<string | null>(null);
+  const [pendingPopupNodeId, setPendingPopupNodeId] = useState<string | null>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressActive = useRef(false);
   const arrowPressRef = useRef<ArrowPressState | null>(null);
@@ -410,6 +415,30 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
 
   const resetView = useCallback(() => setViewBox(tree.maxDepth <= 3 ? { x: -500, y: -700, w: 1000, h: 1400 } : { x: -1400, y: -1600, w: 2800, h: 3200 }), [tree.maxDepth]);
 
+  const fitToContent = useCallback(() => {
+    const svg = svgRef.current;
+    const nodes = getNodesFromTree(tree);
+    if (!svg || nodes.length === 0) {
+      resetView();
+      return;
+    }
+    const rootId = tree.root?.id ?? null;
+    const boxes = nodes.map((node) => getNodeBox(node, node.id === rootId));
+    const contentRoutes = buildDerivedRoutes(tree);
+    const points = [...boxes.flatMap((box) => [{ x: box.x, y: box.y }, { x: box.x + box.w, y: box.y + box.h }]), ...contentRoutes.flatMap(({ route }) => route.points)];
+    const minX = Math.min(...points.map((point) => point.x));
+    const maxX = Math.max(...points.map((point) => point.x));
+    const minY = Math.min(...points.map((point) => point.y));
+    const maxY = Math.max(...points.map((point) => point.y));
+    const rect = svg.getBoundingClientRect();
+    const aspect = rect.width / Math.max(rect.height, 1);
+    const contentW = Math.max(maxX - minX, 160) + 180;
+    const contentH = Math.max(maxY - minY, 160) + 180;
+    const width = Math.max(contentW, contentH * aspect);
+    const height = Math.max(contentH, contentW / Math.max(aspect, 0.1));
+    setViewBox({ x: (minX + maxX - width) / 2, y: (minY + maxY - height) / 2, w: width, h: height });
+  }, [tree, resetView]);
+
   const endLongPress = useCallback(() => {
     longPressActive.current = false;
     if (longPressTimer.current) clearTimeout(longPressTimer.current);
@@ -426,7 +455,13 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       const rect = svg.getBoundingClientRect();
       setActionPanelScreenPos({ x: (world.x - viewBox.x) * rect.width / viewBox.w, y: (world.y - viewBox.y) * rect.height / viewBox.h });
       setActionPanelTarget(target);
+      longPressActive.current = false;
     }, 500);
+  }
+
+  function openNodePopup(nodeId: string) {
+    if (popupNodeId && popupNodeId !== nodeId) setPendingPopupNodeId(nodeId);
+    else setPopupNodeId(nodeId);
   }
 
   function selectForConnection(nodeId: string) {
@@ -463,34 +498,33 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     setConnectMode(false);
   }
 
-  function makePlacementNode(kind: "node" | "joiner", point: Point): NodeData {
+  function makePlacementNode(point: Point): NodeData {
     return {
       id: `${tree.id}-placement-preview`,
       x: point.x,
       y: point.y,
-      label: kind === "joiner" ? "" : "New node",
-      color: kind === "joiner" ? "white" : "violet",
-      kind,
+      label: "",
+      color: "violet",
+      popupContent: "",
       children: [],
     };
   }
 
   function rejectPlacement(message: string, description?: string) {
     setAddNodeMode(false);
-    setJoinerMode(false);
     setPlacementPreview(null);
     toast.message(message, description ? { description } : undefined);
   }
 
-  function updatePlacementPreview(point: Point, kind: "node" | "joiner", blockedByArrow = false) {
-    const candidate = makePlacementNode(kind, point);
+  function updatePlacementPreview(point: Point, blockedByArrow = false) {
+    const candidate = makePlacementNode(point);
     const valid = !blockedByArrow && canPlaceNode(candidate, Object.values(tree.nodeMap), tree.root?.id ?? null);
-    setPlacementPreview({ kind, x: point.x, y: point.y, valid });
+    setPlacementPreview({ x: point.x, y: point.y, valid });
   }
 
   function addIndependentNode(point: Point) {
     const nodeId = `${tree.id}-node-${Date.now()}`;
-    const node: NodeData = { id: nodeId, x: point.x, y: point.y, label: "New node", color: "violet", kind: "node", children: [] };
+    const node: NodeData = { id: nodeId, x: point.x, y: point.y, label: "", color: "violet", popupContent: "", children: [] };
     if (!canPlaceNode(node, Object.values(tree.nodeMap), tree.root?.id ?? null)) {
       rejectPlacement("Space occupied", "Choose an open area for the node.");
       return;
@@ -501,48 +535,10 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     toast.success("Node placed");
   }
 
-  function createJoiner(point: Point) {
-    const nodeId = `${tree.id}-joiner-${Date.now()}`;
-    const node: NodeData = { id: nodeId, x: point.x, y: point.y, label: "", color: "white", kind: "joiner", children: [] };
-    if (!canPlaceNode(node, Object.values(tree.nodeMap), tree.root?.id ?? null)) {
-      rejectPlacement("Space occupied", "Choose an open area for the joiner.");
-      return;
-    }
-    dispatch({ type: "ADD_JOINER", treeId: tree.id, node });
-    setJoinerMode(false);
-    setPlacementPreview(null);
-    toast.success("Joiner placed", { description: "You can now connect it like any node." });
-  }
-
-  function placeJoinerOnArrow(sourceId: string, targetId: string, route: Route, clientX: number, clientY: number) {
-    const point = worldPoint(clientX, clientY);
-    if (!point) return;
-    const nearest = nearestPointOnRoute(point, route);
-    const isEndpoint = nearest && (nearest.point.x === route.points[0].x && nearest.point.y === route.points[0].y || nearest.point.x === route.points[route.points.length - 1].x && nearest.point.y === route.points[route.points.length - 1].y);
-    if (!nearest || nearest.distance > 32 || nearest.segmentLength < JOINER_MIN_SEGMENT || isEndpoint) {
-      rejectPlacement("Choose a clear arrow segment", "The joiner needs room away from the nodes and crossings.");
-      return;
-    }
-    const nodeId = `${tree.id}-joiner-${Date.now()}`;
-    const node: NodeData = { id: nodeId, x: nearest.point.x, y: nearest.point.y, label: "", color: "white", kind: "joiner", children: [] };
-    if (!canPlaceNode(node, Object.values(tree.nodeMap), tree.root?.id ?? null)) {
-      rejectPlacement("Space occupied", "The joiner cannot overlap a node or another joiner.");
-      return;
-    }
-    dispatch({ type: "PLACE_JOINER_ON_ARROW", treeId: tree.id, sourceId, targetId, node });
-    setJoinerMode(false);
-    setPlacementPreview(null);
-    toast.success("Arrow split", { description: "The joiner now moves with both route segments." });
-  }
-
   function beginNodePointer(e: React.PointerEvent<SVGGElement>, node: NodeData) {
     e.stopPropagation();
     if (addNodeMode) {
       rejectPlacement("Node not placed", "Tap an empty canvas area.");
-      return;
-    }
-    if (joinerMode) {
-      rejectPlacement("Joiner not placed", "Tap empty canvas or an arrow segment.");
       return;
     }
     if (connectMode) {
@@ -585,10 +581,15 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== e.pointerId) return;
     const point = dragPosition?.nodeId === drag.nodeId ? dragPosition : null;
+    const shortTap = !drag.moved && longPressActive.current;
     endLongPress();
     if (drag.moved && point) {
       if (point.valid) dispatch({ type: "MOVE_NODE", treeId: tree.id, nodeId: drag.nodeId, x: point.x, y: point.y });
       else toast.message("Space occupied", { description: "The object returned to its previous position." });
+    }
+    if (shortTap) {
+      setActionPanelTarget(null);
+      openNodePopup(drag.nodeId);
     }
     setDragPosition(null);
     dragRef.current = null;
@@ -598,10 +599,6 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     e.stopPropagation();
     if (addNodeMode) {
       rejectPlacement("Node not placed", "A node cannot be placed directly on an arrow.");
-      return;
-    }
-    if (joinerMode) {
-      placeJoinerOnArrow(sourceId, targetId, route, e.clientX, e.clientY);
       return;
     }
     arrowPressRef.current = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY };
@@ -632,7 +629,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     const svg = svgRef.current;
     if (!svg) return;
     const rect = svg.getBoundingClientRect();
-    if (addNodeMode || joinerMode) {
+    if (addNodeMode) {
       setIsPanning(false);
       return;
     }
@@ -677,24 +674,23 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
 
   function handleMouseDown(e: React.MouseEvent<SVGSVGElement>) {
     if ((e.target as Element).closest("[data-node-id]") || (e.target as Element).closest("[data-arrow-id]")) return;
-    if (addNodeMode || joinerMode) return;
+    if (addNodeMode) return;
     setIsPanning(true);
     panStart.current = { x: e.clientX, y: e.clientY };
   }
 
   function handleSvgPointerDown(e: React.PointerEvent<SVGSVGElement>) {
-    if (!addNodeMode && !joinerMode) return;
+    if (!addNodeMode) return;
     if ((e.target as Element).closest("[data-node-id]") || (e.target as Element).closest("[data-arrow-id]")) return;
     const point = worldPoint(e.clientX, e.clientY);
     if (!point) return;
-    if (addNodeMode) addIndependentNode(point);
-    else createJoiner(point);
+    addIndependentNode(point);
   }
 
   function handleSvgPointerMove(e: React.PointerEvent<SVGSVGElement>) {
-    if (!addNodeMode && !joinerMode) return;
+    if (!addNodeMode) return;
     const point = worldPoint(e.clientX, e.clientY);
-    if (point) updatePlacementPreview(point, addNodeMode ? "node" : "joiner", addNodeMode && Boolean((e.target as Element).closest("[data-arrow-id]")));
+    if (point) updatePlacementPreview(point, Boolean((e.target as Element).closest("[data-arrow-id]")));
   }
 
   function handleMouseMove(e: React.MouseEvent<SVGSVGElement>) {
@@ -735,7 +731,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       const key = `${tree.id}-${source.id}-${target.id}`;
       return (
         <g key={key} data-arrow-id={key}>
-          <path d={route.path} fill="none" stroke="transparent" strokeWidth={18} style={{ cursor: joinerMode ? "crosshair" : "pointer" }} onPointerDown={(e) => beginArrowPointer(e, source.id, target.id, route)} onPointerMove={moveArrowPointer} onPointerUp={finishArrowPointer} onPointerCancel={finishArrowPointer} />
+          <path d={route.path} fill="none" stroke="transparent" strokeWidth={18} style={{ cursor: "pointer" }} onPointerDown={(e) => beginArrowPointer(e, source.id, target.id, route)} onPointerMove={moveArrowPointer} onPointerUp={finishArrowPointer} onPointerCancel={finishArrowPointer} />
           <path d={route.path} fill="none" stroke={VIBGYOR_COLORS[arrowColor]} strokeWidth={2} strokeOpacity={0.72} strokeLinecap="round" strokeLinejoin="round" pointerEvents="none" />
           {bridgePoints[index].map(({ point, segment }, crossingIndex) => (
             <g key={`${key}-bridge-${crossingIndex}`} pointerEvents="none">
@@ -749,7 +745,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   }
 
   function renderArrowheads(): ReactNode[] {
-    return routes.filter(({ target }) => target.kind !== "joiner").map(({ source, target, route }) => {
+    return routes.map(({ source, target, route }) => {
       const arrowColor = source.children.find((child) => child.targetId === target.id)?.color ?? "blue";
       const key = `${tree.id}-${source.id}-${target.id}-head`;
       return <polygon key={key} points={getArrowHead(route)} fill={VIBGYOR_COLORS[arrowColor]} opacity={route.clean ? 0.9 : 0.55} pointerEvents="none" />;
@@ -759,28 +755,16 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   function renderNodes(): ReactNode[] {
     return displayNodes.map((node) => {
       const isRoot = node.id === rootId;
-      const joiner = isJoinerNode(node);
       const selected = connectSourceId === node.id;
       const invalidDrag = dragPosition?.nodeId === node.id && !dragPosition.valid;
-      if (joiner) {
-        return (
-          <g key={`${tree.id}-${node.id}`} data-node-id={node.id} className="tree-node-group" style={{ cursor: connectMode ? "crosshair" : dragPosition?.nodeId === node.id ? "grabbing" : "grab" }} onPointerDown={(e) => beginNodePointer(e, node)} onPointerMove={moveNodePointer} onPointerUp={finishNodePointer} onPointerCancel={finishNodePointer}>
-            <circle cx={node.x} cy={node.y} r={JOINER_RADIUS + 6} fill="transparent" pointerEvents="all" />
-            <circle cx={node.x + 2} cy={node.y + 3} r={JOINER_RADIUS + 3} fill="#020307" opacity={0.82} pointerEvents="none" />
-            <circle cx={node.x} cy={node.y} r={JOINER_RADIUS + 1.5} fill="#0c1118" stroke={invalidDrag ? "#ef4444" : selected ? "#f2f4fa" : VIBGYOR_COLORS[node.color]} strokeWidth={invalidDrag || selected ? 3 : 2.5} opacity={0.98} />
-            <circle cx={node.x} cy={node.y} r={JOINER_RADIUS - 1.5} fill="#34475b" stroke="#f4f8fb" strokeOpacity={0.72} strokeWidth={1} pointerEvents="none" />
-            <circle cx={node.x - 2.5} cy={node.y - 3} r={3.2} fill="#f8fbff" opacity={0.78} pointerEvents="none" />
-          </g>
-        );
-      }
       const size = getBoxDimensions(node.label, isRoot);
-      const textLines = buildTextLines(node.label, size.w, isRoot);
       const envelope = getNodeEnvelope(node, isRoot);
+      const heading = truncateHeading(node.label, size.w, isRoot);
       return (
         <g key={`${tree.id}-${node.id}`} data-node-id={node.id} className="tree-node-group" style={{ cursor: connectMode ? "crosshair" : dragPosition?.nodeId === node.id ? "grabbing" : "grab" }} onPointerDown={(e) => beginNodePointer(e, node)} onPointerMove={moveNodePointer} onPointerUp={finishNodePointer} onPointerCancel={finishNodePointer}>
-          <rect x={envelope.kind === "rect" ? envelope.x : node.x - size.w / 2} y={envelope.kind === "rect" ? envelope.y : node.y - size.h / 2} width={envelope.kind === "rect" ? envelope.w : size.w} height={envelope.kind === "rect" ? envelope.h : size.h} rx={NODE_RADIUS + 8} fill="transparent" pointerEvents="all" />
+          <rect x={envelope.x} y={envelope.y} width={envelope.w} height={envelope.h} rx={NODE_RADIUS + 8} fill="transparent" pointerEvents="all" />
           <rect x={node.x - size.w / 2} y={node.y - size.h / 2} width={size.w} height={size.h} rx={NODE_RADIUS} fill="#13131a" stroke={invalidDrag ? "#ef4444" : selected ? "#f2f4fa" : VIBGYOR_COLORS[node.color]} strokeWidth={invalidDrag || selected ? 3 : isRoot ? 2 : 1.5} strokeOpacity={invalidDrag || selected ? 1 : 0.82} />
-          {textLines.length > 0 && <g pointerEvents="none">{textLines.map((line, lineIndex) => <text key={lineIndex} x={node.x} y={node.y - ((textLines.length - 1) * LINE_HEIGHT) / 2 + lineIndex * LINE_HEIGHT} textAnchor="middle" dominantBaseline="central" fill="#e4e4e7" fontSize={isRoot ? ROOT_FONT_SIZE : FONT_SIZE} fontWeight={isRoot ? 600 : 500} fontFamily="'Space Grotesk', sans-serif">{line}</text>)}</g>}
+          {heading && <text x={node.x} y={node.y} textAnchor="middle" dominantBaseline="central" fill="#e4e4e7" fontSize={isRoot ? ROOT_FONT_SIZE : FONT_SIZE} fontWeight={isRoot ? 600 : 500} fontFamily="'Space Grotesk', sans-serif" pointerEvents="none">{heading}</text>}
         </g>
       );
     });
@@ -789,18 +773,10 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   function renderPlacementPreview(): ReactNode {
     if (!placementPreview) return null;
     const invalid = !placementPreview.valid;
-    if (placementPreview.kind === "joiner") {
-      return <g pointerEvents="none" opacity={0.78}>
-        <circle cx={placementPreview.x + 2} cy={placementPreview.y + 3} r={JOINER_RADIUS + 3} fill="#020307" opacity={0.65} />
-        <circle cx={placementPreview.x} cy={placementPreview.y} r={JOINER_RADIUS + 1.5} fill="#0c1118" stroke={invalid ? "#ef4444" : "#e8f0f6"} strokeWidth={3} strokeDasharray="4 3" />
-        <circle cx={placementPreview.x} cy={placementPreview.y} r={JOINER_RADIUS - 1.5} fill="#34475b" />
-      </g>;
-    }
-    const previewNode = makePlacementNode("node", { x: placementPreview.x, y: placementPreview.y });
+    const previewNode = makePlacementNode({ x: placementPreview.x, y: placementPreview.y });
     const size = getBoxDimensions(previewNode.label, false);
     return <g pointerEvents="none" opacity={0.78}>
       <rect x={placementPreview.x - size.w / 2} y={placementPreview.y - size.h / 2} width={size.w} height={size.h} rx={NODE_RADIUS} fill="#13131a" fillOpacity={0.75} stroke={invalid ? "#ef4444" : "#8bb7ff"} strokeWidth={2.5} strokeDasharray="8 5" />
-      <text x={placementPreview.x} y={placementPreview.y} textAnchor="middle" dominantBaseline="central" fill="#e4e4e7" fontSize={FONT_SIZE} fontWeight={500} fontFamily="'Space Grotesk', sans-serif">New node</text>
     </g>;
   }
 
@@ -814,7 +790,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
 
   return (
     <div ref={containerRef} className="relative h-full w-full overflow-hidden" style={{ background: "#0a0a0f" }}>
-      <svg ref={svgRef} width="100%" height="100%" viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`} onPointerDown={handleSvgPointerDown} onPointerMove={handleSvgPointerMove} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={() => setIsPanning(false)} onMouseLeave={() => { setIsPanning(false); setPlacementPreview(null); }} onWheel={(e) => { e.preventDefault(); const rect = svgRef.current?.getBoundingClientRect(); if (rect) zoomByFactor(e.deltaY > 0 ? 1.12 : 0.89, (e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height); }} onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={() => { setIsPanning(false); isPinching.current = false; initialPinchDistance.current = null; }} style={{ cursor: addNodeMode || joinerMode ? "crosshair" : isPanning ? "grabbing" : "grab", touchAction: "none" }}>
+      <svg ref={svgRef} width="100%" height="100%" viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`} onPointerDown={handleSvgPointerDown} onPointerMove={handleSvgPointerMove} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={() => setIsPanning(false)} onMouseLeave={() => { setIsPanning(false); setPlacementPreview(null); }} onWheel={(e) => { e.preventDefault(); const rect = svgRef.current?.getBoundingClientRect(); if (rect) zoomByFactor(e.deltaY > 0 ? 1.12 : 0.89, (e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height); }} onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={() => { setIsPanning(false); isPinching.current = false; initialPinchDistance.current = null; }} style={{ cursor: addNodeMode ? "crosshair" : isPanning ? "grabbing" : "grab", touchAction: "none" }}>
         <DotGrid />
         <rect width="10000" height="10000" x={-5000} y={-5000} fill="url(#dotGrid)" />
         {renderEdges()}
@@ -824,24 +800,32 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       </svg>
 
       <div className="absolute left-5 top-16 z-10 flex max-w-[calc(100%-2.5rem)] flex-wrap items-center gap-2">
-        <button onClick={() => { setAddNodeMode((mode) => !mode); setJoinerMode(false); setConnectMode(false); setConnectSourceId(null); setPlacementPreview(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${addNodeMode ? "border-[#8bb7ff] bg-[#8bb7ff]/15 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#3B82F6]/60 hover:text-white"}`} title="Place one node"><Plus className="h-4 w-4" />{addNodeMode ? "Place node" : "Add node"}</button>
-        <button onClick={() => { setJoinerMode((mode) => !mode); setAddNodeMode(false); setConnectMode(false); setConnectSourceId(null); setPlacementPreview(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${joinerMode ? "border-[#dbeafe] bg-[#f8fafc]/10 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#dbeafe]/60 hover:text-white"}`} title="Place one joiner"><CircleDot className="h-4 w-4" />{joinerMode ? "Place joiner" : "Add joiner"}</button>
-        <button onClick={() => { setConnectMode((mode) => !mode); setAddNodeMode(false); setJoinerMode(false); setConnectSourceId(null); setPlacementPreview(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${connectMode ? "border-[#3B82F6] bg-[#3B82F6]/15 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#3B82F6]/60 hover:text-white"}`} title="Connect two nodes"><Link2 className="h-4 w-4" /><span>{connectMode ? (connectSourceId ? "Select target" : "Select source") : "Connect nodes"}</span></button>
+        <button onClick={() => { setAddNodeMode((mode) => !mode); setConnectMode(false); setConnectSourceId(null); setPlacementPreview(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${addNodeMode ? "border-[#8bb7ff] bg-[#8bb7ff]/15 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#3B82F6]/60 hover:text-white"}`} title="Place one node"><Plus className="h-4 w-4" />{addNodeMode ? "Place node" : "Add node"}</button>
+        <button onClick={() => { setConnectMode((mode) => !mode); setAddNodeMode(false); setConnectSourceId(null); setPlacementPreview(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${connectMode ? "border-[#3B82F6] bg-[#3B82F6]/15 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#3B82F6]/60 hover:text-white"}`} title="Connect two nodes"><Link2 className="h-4 w-4" /><span>{connectMode ? (connectSourceId ? "Select target" : "Select source") : "Connect nodes"}</span></button>
         {connectMode && <button onClick={() => { setConnectMode(false); setConnectSourceId(null); }} className="rounded-lg border border-[#2a2a35] bg-[#13131a] p-2 text-[#8a8a95] hover:text-white" title="Cancel connection mode"><MousePointer2 className="h-4 w-4" /></button>}
         <div className="flex items-center gap-1 rounded-lg border border-[#2a2a35] bg-[#13131a] p-1">
-          <button onClick={() => dispatch({ type: "UNDO" })} disabled={!canUndo} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white disabled:cursor-not-allowed disabled:opacity-35" title="Undo"><Undo2 className="h-4 w-4" /></button>
-          <button onClick={() => dispatch({ type: "REDO" })} disabled={!canRedo} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white disabled:cursor-not-allowed disabled:opacity-35" title="Redo"><Redo2 className="h-4 w-4" /></button>
-          <button onClick={() => { setJoinerMode(false); setConnectMode(false); setConnectSourceId(null); dispatch({ type: "RESET" }); toast.success("Demo roadmaps restored"); }} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white" title="Reset demo roadmaps"><RotateCcw className="h-4 w-4" /></button>
+          <button onClick={() => { if (undoRequiresConfirmation && !window.confirm("Undo will remove a node and its saved popup document. Continue?")) return; dispatch({ type: "UNDO" }); }} disabled={!canUndo} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white disabled:cursor-not-allowed disabled:opacity-35" title="Undo"><Undo2 className="h-4 w-4" /></button>
+          <button onClick={() => { if (redoRequiresConfirmation && !window.confirm("Redo will remove a node and its saved popup document. Continue?")) return; dispatch({ type: "REDO" }); }} disabled={!canRedo} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white disabled:cursor-not-allowed disabled:opacity-35" title="Redo"><Redo2 className="h-4 w-4" /></button>
+          <button onClick={() => { if (resetRequiresConfirmation && !window.confirm("Reset will remove saved popup documents and restore the demo roadmaps. Continue?")) return; setConnectMode(false); setConnectSourceId(null); dispatch({ type: "RESET" }); toast.success("Demo roadmaps restored"); }} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white" title="Reset demo roadmaps"><RotateCcw className="h-4 w-4" /></button>
         </div>
       </div>
 
       <div className="absolute bottom-6 right-6 z-10 flex flex-col gap-2">
         <button onClick={() => zoomByFactor(0.8)} className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#2a2a35] bg-[#13131a] text-[#e4e4e7] transition-all hover:border-[#3a3a45] hover:bg-[#1a1a24] active:scale-95" title="Zoom in"><Plus className="h-5 w-5" strokeWidth={1.5} /></button>
         <button onClick={() => zoomByFactor(1.25)} className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#2a2a35] bg-[#13131a] text-[#e4e4e7] transition-all hover:border-[#3a3a45] hover:bg-[#1a1a24] active:scale-95" title="Zoom out"><Minus className="h-5 w-5" strokeWidth={1.5} /></button>
-        <button onClick={resetView} className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#2a2a35] bg-[#13131a] text-[#e4e4e7] transition-all hover:border-[#3a3a45] hover:bg-[#1a1a24] active:scale-95" title="Reset view"><Home className="h-5 w-5" strokeWidth={1.5} /></button>
+        <button onClick={fitToContent} className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#2a2a35] bg-[#13131a] text-[#e4e4e7] transition-all hover:border-[#3a3a45] hover:bg-[#1a1a24] active:scale-95" title="Fit all content"><Home className="h-5 w-5" strokeWidth={1.5} /></button>
       </div>
 
       {actionPanelTarget && <ActionPanel x={actionPanelScreenPos.x} y={actionPanelScreenPos.y} target={actionPanelTarget} tree={tree} dispatch={dispatch} onClose={() => setActionPanelTarget(null)} />}
+      {popupNodeId && tree.nodeMap[popupNodeId] && <NodePopup
+        node={tree.nodeMap[popupNodeId]}
+        treeId={tree.id}
+        dispatch={dispatch}
+        onClose={() => { setPopupNodeId(null); setPendingPopupNodeId(null); }}
+        switchTarget={pendingPopupNodeId ? tree.nodeMap[pendingPopupNodeId] ?? null : null}
+        onSwitchTargetHandled={() => setPendingPopupNodeId(null)}
+        onSwitchTo={(nodeId) => setPopupNodeId(nodeId)}
+      />}
     </div>
   );
 }

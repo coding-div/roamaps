@@ -13,7 +13,7 @@ import type { TreeMap } from "@/lib/treeData";
 function createNewTree(index: number): TreeMap {
   const id = `tree-${Date.now()}`;
   const rootId = `${id}-root`;
-  const root = { id: rootId, x: 0, y: 0, label: "New Roadmap", color: "blue" as const, kind: "node" as const, children: [] };
+  const root = { id: rootId, x: 0, y: 0, label: "", color: "blue" as const, popupContent: "", children: [] };
   return {
     id,
     title: `New Roadmap ${index}`,

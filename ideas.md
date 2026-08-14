@@ -1,84 +1,73 @@
-# Roamaps Design Brainstorm
+# Roamaps design direction
 
-## Three Approaches
+## Three possible approaches
 
-### 1. Obsidian Canvas
-A raw, utilitarian dark canvas approach inspired by note-taking apps like Obsidian Canvas. Minimal chrome, maximum content space. The tree lives on an infinite dark canvas with subtle grid dots. Nodes are clean rectangles with thin borders. Lines are crisp orthogonal paths with subtle glow. Feels like a professional planning tool — serious, focused, distraction-free.
-**Probability**: 0.08
+### Theme Name: Obsidian Cartography
+Very Brief Intro: A dark, precise canvas language inspired by technical maps and spatial note-taking. It makes learning feel like navigating a quiet instrument panel.
+Probability: 0.06
 
-### 2. Cosmic Nebula
-A dark space-themed aesthetic where the tree branches feel like constellation paths connecting stars. Deep navy-black background with subtle particle effects. Nodes glow with their VIBGYOR colors. Lines are soft luminous trails. Creates a sense of exploration and discovery in learning.
-**Probability**: 0.06
+### Theme Name: Paper Atlas
+Very Brief Intro: A warm editorial system built around parchment, ink, and marginalia. It would make roadmaps feel tactile and archival rather than digital.
+Probability: 0.04
 
-### 3. Blueprint Terminal
-Industrial blueprint aesthetic — dark navy background with cyan/blue grid lines and technical drawing feel. Nodes look like engineering blocks with monospace labels. Lines are precise orthogonal paths with arrow markers. Feels like you're looking at a system architecture diagram.
-**Probability**: 0.03
+### Theme Name: Signal Garden
+Very Brief Intro: A luminous, playful system where colored nodes grow into living networks. It would emphasize curiosity and discovery through softer motion and brighter accents.
+Probability: 0.08
 
----
-
-## Chosen Approach: Obsidian Canvas
+## Chosen approach: Obsidian Cartography
 
 ### Design Movement
-Dark productivity-tool minimalism — inspired by Obsidian Canvas, Excalidraw dark mode, and diagramming tools like draw.io.
+Digital brutalism softened by Swiss information design and the spatial discipline of technical cartography.
 
 ### Core Principles
-1. **Content-first**: The tree is the only focus. Zero decorative chrome.
-2. **Infinite canvas feel**: Pan and zoom should feel natural and fluid.
-3. **Crisp precision**: Orthogonal lines, clean rectangles, sharp edges.
-4. **Subtle depth**: Shadows and borders create hierarchy without clutter.
+1. **Quiet precision:** Every line, node, and label should feel placed rather than decorated.
+2. **Spatial hierarchy:** The canvas is the product; controls stay compact and peripheral.
+3. **Measured contrast:** Near-black graphite grounds the experience while cobalt marks active knowledge.
+4. **Useful density:** Empty space is intentional, but every visible control must earn its place.
 
 ### Color Philosophy
-- Background: Near-black (#0a0a0f) — deep enough to feel like a workspace
-- Surface: Dark charcoal (#13131a) for nodes and panels
-- Borders: Subtle gray (#2a2a35) for node outlines
-- Text: Off-white (#e4e4e7) for readability
-- VIBGYOR: Pure, saturated colors for node accents:
-  - Violet: #8B5CF6
-  - Indigo: #6366F1
-  - Blue: #3B82F6
-  - Green: #22C55E
-  - Yellow: #EAB308
-  - Orange: #F97316
-  - Red: #EF4444
+Roamaps uses near-black graphite as a low-distraction field, cool slate for structure, cobalt blue for action and focus, and restrained violet as a secondary semantic accent. The palette should feel like a precision instrument at night: calm enough for long study sessions, but with small signals that reward exploration.
 
 ### Layout Paradigm
-- **Landing page**: Minimal grid of tree cards, left-aligned with generous spacing
-- **Tree view**: Full-viewport canvas with the tree centered, title floating top-left, back button top-right
-- No centered hero sections, no max-width containers — the canvas IS the page
+Use an asymmetrical, left-anchored landing layout that opens into a full-bleed editor. Roadmap cards should feel like map sheets laid in a working archive rather than equal generic tiles. The editor should keep the canvas dominant, with controls aligned to the edges and an understated status rail.
 
 ### Signature Elements
-1. **Dot grid background**: Subtle repeating dots on the dark canvas (like graph paper in dark mode)
-2. **Orthogonal connector paths**: Right-angle lines with small arrow markers at the end
-3. **Node glow on hover**: Subtle colored border glow when hovering a node
+1. Fine dotted coordinate grids and orthogonal connector lines.
+2. Thin cobalt “route markers” that appear at active edges and card tops.
+3. Compact uppercase metadata labels with generous tracking, like map annotations.
 
 ### Interaction Philosophy
-- Pan: Click and drag the canvas background
-- Zoom: Scroll wheel, centered on cursor position
-- Long-press on node: Reveals color picker
-- Click tree card: Navigate to that tree's canvas view
+Interactions should feel deliberate and reversible. Hovering reveals structure; selecting creates a precise focus state; adding a node feels like placing a pin; connecting nodes feels like drawing a route. Avoid surprise motion or decorative effects that compete with the map.
 
 ### Animation
-- Cards on landing: Fade-in with slight upward translate, staggered
-- Color picker: Snap open with scale from 0.95, 150ms ease-out
-- Node hover: Border color transitions smoothly, 120ms
-- Page transitions: Fade, 200ms
+Use 160–220ms ease-out transitions for buttons, cards, and panel reveals. Stagger landing cards by 50ms. Use subtle opacity and translate transitions only; node and arrow operations should remain immediate. Respect reduced-motion preferences and never animate the canvas while the user is panning.
 
 ### Typography System
-- Display: "Space Grotesk" — geometric sans-serif, modern and technical
-- Body/UI: "Inter" — clean, highly readable
-- Monospace (for node labels): "JetBrains Mono" — fits the technical aesthetic
+Use Space Grotesk for display text, roadmap titles, and controls; use IBM Plex Mono for metadata, counts, and canvas annotations. Headlines should be compact and assertive. Body copy should stay small, cool, and information-dense without becoming cryptic.
 
 ### Brand Essence
-A focused dark canvas for mapping knowledge trees — for learners who think in structures.
-**Personality**: Technical, Focused, Clean
+Roamaps is a visual thinking tool for learners who want to see how ideas connect, without the noise of a conventional productivity suite. Personality: **precise, exploratory, composed**.
 
 ### Brand Voice
-- Headlines: Direct, instructional. "Your knowledge, mapped."
-- CTAs: Action-oriented, minimal. "Open tree"
-- No filler greetings or generic copy.
+Headlines are short and directional. CTAs describe the action rather than selling it. Microcopy is calm, specific, and honest.
+
+Example lines:
+
+> Build the shape of what you know.
+
+> Place a node. Draw the route.
 
 ### Wordmark & Logo
-Simple geometric branching icon — three connected nodes forming a Y-shape, rendered in white on dark. No text in the logo.
+The mark is a compact three-node route glyph: two cobalt points offset around a central junction, joined by one crisp right-angle path. The wordmark is set in a custom-tightened Space Grotesk treatment with a slightly extended “R” leg; never use the plain font treatment without the mark.
 
 ### Signature Brand Color
-Deep canvas black (#0a0a0f) — the defining background that makes every color choice pop.
+**Route Cobalt — `#4C7DFF`**. It is bright enough to signal focus on graphite without becoming a generic neon accent.
+
+## Style Decisions
+
+- The published project should preserve the original dark canvas editor rather than introduce a generic marketing shell.
+- Generated artwork is used sparingly: the logo mark anchors the brand, the constellation supports the landing hero, and tree illustrations appear only as roadmap previews.
+- The local-first model remains the product truth: users can build immediately without login, and changes remain stored in their browser.
+- The foundation editor must carry the cartographic system with equal conviction: full-bleed graphite canvas, fine coordinate structure, compact edge controls, a quiet status rail, and cobalt reserved for action and focus.
+- Roadmap cards and popup documents should read as working map-sheet artifacts through annotation hierarchy, route-marker details, and calm directional copy rather than generic SaaS language.
+- The centered NodePopup is a document surface, not a generic modal: its heading identifies the plotted node, its cobalt edge marks focus, and its plain-text body remains the visual center of the interaction.
