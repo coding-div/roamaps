@@ -47,7 +47,7 @@ const LANE_GAP = 12;
 interface ViewBox { x: number; y: number; w: number; h: number }
 interface Segment { a: Point; b: Point }
 interface Route { points: Point[]; path: string; targetDirection: Direction; midpoint: Point; clean: boolean }
-interface DragState { nodeId: string; pointerId: number; startX: number; startY: number; moved: boolean; x: number; y: number }
+interface DragState { nodeId: string; pointerId: number; startX: number; startY: number; moved: boolean; x: number; y: number; baselineRoutes: Map<string, Route> }
 interface ArrowPressState { pointerId: number; startX: number; startY: number }
 interface DragPreview { nodeId: string; x: number; y: number; valid: boolean }
 interface PlacementPreview { x: number; y: number; valid: boolean }
@@ -371,6 +371,18 @@ function buildDerivedRoutes(tree: TreeMap, override?: { nodeId: string; x: numbe
   });
 }
 
+function routeKey(sourceId: string, targetId: string): string {
+  return `${sourceId}->${targetId}`;
+}
+
+function introducesNewRouteProblems(baselineRoutes: Map<string, Route>, candidateRoutes: DerivedRoute[]): boolean {
+  return candidateRoutes.some(({ source, target, route }) => {
+    const key = routeKey(source.id, target.id);
+    const baseline = baselineRoutes.get(key);
+    return Boolean(baseline?.clean && !route.clean);
+  });
+}
+
 export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const { dispatch, canUndo, canRedo, undoRequiresConfirmation, redoRequiresConfirmation, resetRequiresConfirmation } = useRoadmaps();
   const svgRef = useRef<SVGSVGElement>(null);
@@ -486,8 +498,10 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       } else {
         testSource.children.push({ targetId: nodeId, color: "blue" });
         const testTree = { ...tree, nodeMap: testNodeMap, root: tree.root ? testNodeMap[tree.root.id] ?? null : null };
-        const clean = buildDerivedRoutes(testTree).every(({ route }) => route.clean);
-        if (!clean) toast.message("No clean route", { description: "Move a node or choose another direction before adding this arrow." });
+        const baselineRoutes = new Map(buildDerivedRoutes(tree).map(({ source, target, route }) => [routeKey(source.id, target.id), route]));
+        const candidateRoutes = buildDerivedRoutes(testTree);
+        const routeValidationPassed = !introducesNewRouteProblems(baselineRoutes, candidateRoutes);
+        if (!routeValidationPassed) toast.message("Route conflict", { description: "This arrow would disturb a clear route already on the map." });
         else {
           dispatch({ type: "ADD_ARROW", treeId: tree.id, sourceId: connectSourceId, targetId: nodeId, color: "blue" });
           toast.success("Arrow added");
@@ -547,7 +561,8 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     }
     const point = worldPoint(e.clientX, e.clientY);
     if (!point) return;
-    dragRef.current = { nodeId: node.id, pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, moved: false, x: node.x, y: node.y };
+    const baselineRoutes = new Map(buildDerivedRoutes(tree).map(({ source, target, route }) => [routeKey(source.id, target.id), route]));
+    dragRef.current = { nodeId: node.id, pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, moved: false, x: node.x, y: node.y, baselineRoutes };
     try {
       e.currentTarget.setPointerCapture?.(e.pointerId);
     } catch {
@@ -570,7 +585,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
         if (!node) return;
         const candidate = { ...node, x: drag.x + point.x - startPoint.x, y: drag.y + point.y - startPoint.y };
         const routesForCandidate = buildDerivedRoutes(tree, { nodeId: drag.nodeId, x: candidate.x, y: candidate.y });
-        const routesStaySeparated = routesForCandidate.every(({ route }) => route.clean);
+        const routesStaySeparated = !introducesNewRouteProblems(drag.baselineRoutes, routesForCandidate);
         const valid = canPlaceNode(candidate, Object.values(tree.nodeMap), tree.root?.id ?? null, drag.nodeId) && routesStaySeparated;
         setDragPosition({ nodeId: drag.nodeId, x: candidate.x, y: candidate.y, valid });
       }
