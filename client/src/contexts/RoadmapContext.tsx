@@ -259,13 +259,13 @@ function loadInitialState(): HistoryState {
       const parsed = JSON.parse(saved) as TreeMap[];
       if (Array.isArray(parsed)) {
         const normalized = parsed.map((tree) => {
-          const rawEntries = Object.entries(tree.nodeMap ?? {}).filter(([, node]) => !Object.prototype.hasOwnProperty.call(node, "kind"));
+          const rawEntries = Object.entries(tree.nodeMap ?? {}).filter(([, node]) => (node as NodeData & { kind?: string }).kind !== "joiner");
           const validIds = new Set(rawEntries.map(([id]) => id));
           const nodeMap = Object.fromEntries(rawEntries.map(([id, node]) => [id, {
             ...node,
             popupContent: node.popupContent ?? "",
             children: (node.children ?? [])
-              .filter((child) => validIds.has(child.targetId))
+              .filter((child) => validIds.has(child.targetId) && !(child as { splitJoinerId?: string }).splitJoinerId)
               .map((child) => ({ targetId: child.targetId, color: child.color })),
           }])) as Record<string, NodeData>;
           const rootId = tree.root?.id;

@@ -4,7 +4,7 @@
  * Tree 1: up to 3 levels deep
  * Tree 2: up to 8 levels deep
  * Foundation reset: ordinary directed arrows, short node headings, and
- * separate unlimited popup documents. The graph stays flat and explicit.
+ * separate unlimited popup documents. No hidden joiner graph objects remain.
  */
 
 export type NodeColor =

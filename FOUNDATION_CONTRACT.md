@@ -1,9 +1,9 @@
 # Roamaps Foundation-Only Editor Contract
 
-**Status:** Approved — implementation completed  
-**Date:** 2026-08-14  
-**Project:** Roamaps dark-mode visual roadmap and knowledge-tree editor  
-**Implementation target:** `/home/ubuntu/roamaps-live`  
+**Status:** Approved — implemented foundation scope
+**Date:** 2026-08-14
+**Project:** Roamaps dark-mode visual roadmap and knowledge-tree editor
+**Implementation target:** `/home/ubuntu/roamaps-live`
 **Source repository:** `/home/ubuntu/roamaps`
 
 ## 1. Purpose and scope
@@ -172,4 +172,4 @@ The implementation is complete only after all of the following are checked:
 
 **No application code changes are authorized until the user explicitly approves this foundation contract.** After approval, implementation will follow the file plan and verification gate above. Any newly discovered ambiguity will pause implementation and be presented for a decision rather than guessed.
 
-**Approval status:** Approved by the user on 2026-08-14. Implementation and verification completed in `/home/ubuntu/roamaps-live`.
+**Approval status:** Awaiting user confirmation.

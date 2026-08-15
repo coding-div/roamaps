@@ -1,6 +1,6 @@
 /*
  * Obsidian Cartography action menu: compact graphite controls, cobalt focus,
- * and no hidden graph objects. This panel is reserved for long-press actions.
+ * and no hidden joiner objects. This panel is reserved for long-press actions.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -30,13 +30,13 @@ export default function ActionPanel({ x, y, target, tree, dispatch, onClose }: A
   const adjustedY = y + 300 > window.innerHeight ? Math.max(12, y - 310) : y + 20;
 
   useEffect(() => {
-    const handler = (event: MouseEvent) => {
+    const handler = (event: PointerEvent) => {
       if (panelRef.current && !panelRef.current.contains(event.target as Node)) onClose();
     };
-    const timer = setTimeout(() => window.addEventListener("click", handler), 50);
+    const timer = setTimeout(() => window.addEventListener("pointerdown", handler), 0);
     return () => {
       clearTimeout(timer);
-      window.removeEventListener("click", handler);
+      window.removeEventListener("pointerdown", handler);
     };
   }, [onClose]);
 

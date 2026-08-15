@@ -3,7 +3,7 @@
  * survey grid, cobalt controls, VIBGYOR route colors, and precise spatial ink.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   getAllEdges as getEdgesFromTree,
   getAllNodes as getNodesFromTree,
@@ -52,6 +52,17 @@ interface ArrowPressState { pointerId: number; startX: number; startY: number }
 interface DragPreview { nodeId: string; x: number; y: number; valid: boolean }
 interface PlacementPreview { x: number; y: number; valid: boolean }
 type PanelTarget = { type: "node"; nodeId: string } | { type: "arrow"; sourceId: string; targetId: string };
+
+function routeKey(sourceId: string, targetId: string): string {
+  return `${sourceId}->${targetId}`;
+}
+
+function introducesNewRouteProblems(baselineRoutes: Map<string, Route>, candidateRoutes: DerivedRoute[]): boolean {
+  return candidateRoutes.some(({ source, target, route }) => {
+    const previous = baselineRoutes.get(routeKey(source.id, target.id));
+    return Boolean(previous?.clean && !route.clean);
+  });
+}
 
 function DotGrid() {
   return (
@@ -227,8 +238,6 @@ function getOrthogonalRoute(source: NodeData, target: NodeData, sourceBox: Box, 
   const pairs: Array<[Direction, Direction]> = [];
   for (const sourceDirection of ordered) for (const targetDirection of ordered) pairs.push([sourceDirection, targetDirection]);
   const candidates: Array<{ points: Point[]; targetDirection: Direction; cost: number; clean: boolean }> = [];
-  const laneYs = Array.from(new Set(obstacles.flatMap((obstacle) => [obstacle.y - OBSTACLE_PADDING - 2, obstacle.y + obstacle.h + OBSTACLE_PADDING + 2])));
-  const laneXs = Array.from(new Set(obstacles.flatMap((obstacle) => [obstacle.x - OBSTACLE_PADDING - 2, obstacle.x + obstacle.w + OBSTACLE_PADDING + 2])));
 
   for (const [sourceDirection, targetDirection] of pairs) {
     const start = getPort(source, sourceBox, sourceDirection);
@@ -241,29 +250,6 @@ function getOrthogonalRoute(source: NodeData, target: NodeData, sourceBox: Box, 
     ];
     for (const rawPoints of connectors) {
       const points = simplifyPoints(rawPoints);
-      const clear = routeClear(points, obstacles, arrowObstacles);
-      const selfClear = !routeHasSelfConflict(points);
-      const finalSegment = points[points.length - 1] && points[points.length - 2]
-        ? Math.abs(points[points.length - 1].x - points[points.length - 2].x) + Math.abs(points[points.length - 1].y - points[points.length - 2].y)
-        : 0;
-      const clean = clear && selfClear && finalSegment >= MIN_ARROW_SEGMENT;
-      const obstaclePenalty = clean ? 0 : 100000;
-      candidates.push({ points, targetDirection, cost: routeLength(points) + points.length * 10 + obstaclePenalty, clean });
-    }
-
-    for (const laneY of laneYs) {
-      const points = simplifyPoints([start, startOut, { x: startOut.x, y: laneY }, { x: endIn.x, y: laneY }, endIn, end]);
-      const clear = routeClear(points, obstacles, arrowObstacles);
-      const selfClear = !routeHasSelfConflict(points);
-      const finalSegment = points[points.length - 1] && points[points.length - 2]
-        ? Math.abs(points[points.length - 1].x - points[points.length - 2].x) + Math.abs(points[points.length - 1].y - points[points.length - 2].y)
-        : 0;
-      const clean = clear && selfClear && finalSegment >= MIN_ARROW_SEGMENT;
-      const obstaclePenalty = clean ? 0 : 100000;
-      candidates.push({ points, targetDirection, cost: routeLength(points) + points.length * 10 + obstaclePenalty, clean });
-    }
-    for (const laneX of laneXs) {
-      const points = simplifyPoints([start, startOut, { x: laneX, y: startOut.y }, { x: laneX, y: endIn.y }, endIn, end]);
       const clear = routeClear(points, obstacles, arrowObstacles);
       const selfClear = !routeHasSelfConflict(points);
       const finalSegment = points[points.length - 1] && points[points.length - 2]
@@ -351,17 +337,6 @@ interface DerivedRoute {
   route: Route;
 }
 
-function pointsMatch(a: Point, b: Point): boolean {
-  return Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5;
-}
-
-function routeMatchesPorts(route: Route, source: NodeData, target: NodeData, sourceBox: Box, targetBox: Box): boolean {
-  const first = route.points[0];
-  const second = route.points[1] ?? first;
-  const sourceDirection = directionFromTo(first, second);
-  return pointsMatch(first, getPort(source, sourceBox, sourceDirection)) && pointsMatch(route.points[route.points.length - 1], getPort(target, targetBox, route.targetDirection));
-}
-
 function buildDerivedRoutes(tree: TreeMap, override?: { nodeId: string; x: number; y: number }): DerivedRoute[] {
   const nodes = getNodesFromTree(tree);
   const edges = getEdgesFromTree(tree);
@@ -379,30 +354,17 @@ function buildDerivedRoutes(tree: TreeMap, override?: { nodeId: string; x: numbe
     const obstacleBoxes = displayNodes.filter((node) => node.id !== source.id && node.id !== target.id).map((node) => boxes.get(node.id)!);
     const reverseKey = `${target.id}->${source.id}`;
     const arrowObstacles = reservedRoutes.filter((entry) => entry.key !== reverseKey).flatMap((entry) => entry.segments);
-    const key = `${source.id}->${target.id}`;
     const baseRoute = getOrthogonalRoute(sourceNode, targetNode, sourceBox, targetBox, obstacleBoxes, arrowObstacles);
     const laneRoute = applyReverseLane(baseRoute, sourceNode, targetNode, sourceBox, targetBox, getReverseLane(source, target, orderedEdges));
     const clean = laneRoute.clean && !routeHasSelfConflict(laneRoute.points) && !routeHasArrowConflict(laneRoute.points, arrowObstacles);
     const route = clean === laneRoute.clean ? laneRoute : { ...laneRoute, clean };
-    reservedRoutes.push({ key: `${source.id}->${target.id}`, segments: toSegments(route.points) });
+    reservedRoutes.push({ key: routeKey(source.id, target.id), segments: toSegments(route.points) });
     return { source, target, sourceNode, targetNode, route };
   });
 }
 
-function routeKey(sourceId: string, targetId: string): string {
-  return `${sourceId}->${targetId}`;
-}
-
-function introducesNewRouteProblems(baselineRoutes: Map<string, Route>, candidateRoutes: DerivedRoute[]): boolean {
-  return candidateRoutes.some(({ source, target, route }) => {
-    const key = routeKey(source.id, target.id);
-    const baseline = baselineRoutes.get(key);
-    return Boolean(baseline?.clean && !route.clean);
-  });
-}
-
 export default function TreeCanvas({ tree }: TreeCanvasProps) {
-  const { dispatch, canUndo, canRedo, undoRequiresConfirmation, redoRequiresConfirmation, resetRequiresConfirmation } = useRoadmaps();
+  const { dispatch, canUndo, canRedo } = useRoadmaps();
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [addNodeMode, setAddNodeMode] = useState(false);
@@ -430,12 +392,16 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     const svg = svgRef.current;
     if (!svg) return null;
     const rect = svg.getBoundingClientRect();
-    const scale = Math.min(rect.width / viewBox.w, rect.height / viewBox.h);
-    const renderedWidth = viewBox.w * scale;
-    const renderedHeight = viewBox.h * scale;
+    const viewAspect = viewBox.w / viewBox.h;
+    const screenAspect = rect.width / Math.max(rect.height, 1);
+    const renderedWidth = screenAspect > viewAspect ? rect.height * viewAspect : rect.width;
+    const renderedHeight = screenAspect > viewAspect ? rect.height : rect.width / viewAspect;
     const offsetX = (rect.width - renderedWidth) / 2;
     const offsetY = (rect.height - renderedHeight) / 2;
-    return { x: viewBox.x + (clientX - rect.left - offsetX) / scale, y: viewBox.y + (clientY - rect.top - offsetY) / scale };
+    return {
+      x: viewBox.x + ((clientX - rect.left - offsetX) / renderedWidth) * viewBox.w,
+      y: viewBox.y + ((clientY - rect.top - offsetY) / renderedHeight) * viewBox.h,
+    };
   }, [viewBox]);
 
   const zoomByFactor = useCallback((factor: number, centerFracX = 0.5, centerFracY = 0.5) => {
@@ -521,9 +487,8 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
         testSource.children.push({ targetId: nodeId, color: "blue" });
         const testTree = { ...tree, nodeMap: testNodeMap, root: tree.root ? testNodeMap[tree.root.id] ?? null : null };
         const baselineRoutes = new Map(buildDerivedRoutes(tree).map(({ source, target, route }) => [routeKey(source.id, target.id), route]));
-        const candidateRoutes = buildDerivedRoutes(testTree);
-        const routeValidationPassed = !introducesNewRouteProblems(baselineRoutes, candidateRoutes);
-        if (!routeValidationPassed) toast.message("Route conflict", { description: "This arrow would disturb a clear route already on the map." });
+        const introducesProblems = introducesNewRouteProblems(baselineRoutes, buildDerivedRoutes(testTree));
+        if (introducesProblems) toast.message("Route would disrupt existing arrows", { description: "Move a node or choose another direction before adding this arrow." });
         else {
           dispatch({ type: "ADD_ARROW", treeId: tree.id, sourceId: connectSourceId, targetId: nodeId, color: "blue" });
           toast.success("Arrow added");
@@ -572,6 +537,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   }
 
   function beginNodePointer(e: React.PointerEvent<SVGGElement>, node: NodeData) {
+    e.preventDefault();
     e.stopPropagation();
     if (addNodeMode) {
       rejectPlacement("Node not placed", "Tap an empty canvas area.");
@@ -607,8 +573,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
         if (!node) return;
         const candidate = { ...node, x: drag.x + point.x - startPoint.x, y: drag.y + point.y - startPoint.y };
         const routesForCandidate = buildDerivedRoutes(tree, { nodeId: drag.nodeId, x: candidate.x, y: candidate.y });
-        const routesStaySeparated = !introducesNewRouteProblems(drag.baselineRoutes, routesForCandidate);
-        const valid = canPlaceNode(candidate, Object.values(tree.nodeMap), tree.root?.id ?? null, drag.nodeId) && routesStaySeparated;
+        const valid = canPlaceNode(candidate, Object.values(tree.nodeMap), tree.root?.id ?? null, drag.nodeId) && !introducesNewRouteProblems(drag.baselineRoutes, routesForCandidate);
         setDragPosition({ nodeId: drag.nodeId, x: candidate.x, y: candidate.y, valid });
       }
     }
@@ -633,6 +598,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   }
 
   function beginArrowPointer(e: React.PointerEvent<SVGPathElement>, sourceId: string, targetId: string, route: Route) {
+    e.preventDefault();
     e.stopPropagation();
     if (addNodeMode) {
       rejectPlacement("Node not placed", "A node cannot be placed directly on an arrow.");
@@ -745,12 +711,12 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const rootId = tree.root?.id ?? null;
   const positionOverride = dragPosition ? { nodeId: dragPosition.nodeId, x: dragPosition.x, y: dragPosition.y } : undefined;
   const positionOf = (node: NodeData): NodeData => positionOverride?.nodeId === node.id ? { ...node, x: positionOverride.x, y: positionOverride.y } : node;
-  const displayNodes = nodes.map(positionOf);
-  // Every render uses the current obstacle field. A third-node move can alter
-  // an arrow without changing either endpoint, so no committed route may be
-  // reused across renders.
-  const routes = buildDerivedRoutes(tree, positionOverride);
-  const bridgePoints = routes.map((current, index) => {
+  const displayNodes = useMemo(() => nodes.map(positionOf), [nodes, positionOverride?.nodeId, positionOverride?.x, positionOverride?.y]);
+  const routes = useMemo(
+    () => buildDerivedRoutes(tree, positionOverride),
+    [tree, positionOverride?.nodeId, positionOverride?.x, positionOverride?.y]
+  );
+  const bridgePoints = useMemo(() => routes.map((current, index) => {
     const currentSegments = toSegments(current.route.points);
     const crossings: Array<{ point: Point; segment: Segment }> = [];
     for (let otherIndex = 0; otherIndex < index; otherIndex++) {
@@ -760,7 +726,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       }
     }
     return crossings;
-  });
+  }), [routes]);
 
   function renderEdges(): ReactNode[] {
     return routes.map(({ source, target, route }, index) => {
@@ -841,9 +807,9 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
         <button onClick={() => { setConnectMode((mode) => !mode); setAddNodeMode(false); setConnectSourceId(null); setPlacementPreview(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${connectMode ? "border-[#3B82F6] bg-[#3B82F6]/15 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#3B82F6]/60 hover:text-white"}`} title="Connect two nodes"><Link2 className="h-4 w-4" /><span>{connectMode ? (connectSourceId ? "Select target" : "Select source") : "Connect nodes"}</span></button>
         {connectMode && <button onClick={() => { setConnectMode(false); setConnectSourceId(null); }} className="rounded-lg border border-[#2a2a35] bg-[#13131a] p-2 text-[#8a8a95] hover:text-white" title="Cancel connection mode"><MousePointer2 className="h-4 w-4" /></button>}
         <div className="flex items-center gap-1 rounded-lg border border-[#2a2a35] bg-[#13131a] p-1">
-          <button onClick={() => { if (undoRequiresConfirmation && !window.confirm("Undo will remove a node and its saved popup document. Continue?")) return; dispatch({ type: "UNDO" }); }} disabled={!canUndo} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white disabled:cursor-not-allowed disabled:opacity-35" title="Undo"><Undo2 className="h-4 w-4" /></button>
-          <button onClick={() => { if (redoRequiresConfirmation && !window.confirm("Redo will remove a node and its saved popup document. Continue?")) return; dispatch({ type: "REDO" }); }} disabled={!canRedo} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white disabled:cursor-not-allowed disabled:opacity-35" title="Redo"><Redo2 className="h-4 w-4" /></button>
-          <button onClick={() => { if (resetRequiresConfirmation && !window.confirm("Reset will remove saved popup documents and restore the demo roadmaps. Continue?")) return; setConnectMode(false); setConnectSourceId(null); dispatch({ type: "RESET" }); toast.success("Demo roadmaps restored"); }} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white" title="Reset demo roadmaps"><RotateCcw className="h-4 w-4" /></button>
+          <button onClick={() => dispatch({ type: "UNDO" })} disabled={!canUndo} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white disabled:cursor-not-allowed disabled:opacity-35" title="Undo"><Undo2 className="h-4 w-4" /></button>
+          <button onClick={() => dispatch({ type: "REDO" })} disabled={!canRedo} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white disabled:cursor-not-allowed disabled:opacity-35" title="Redo"><Redo2 className="h-4 w-4" /></button>
+          <button onClick={() => { setConnectMode(false); setConnectSourceId(null); dispatch({ type: "RESET" }); toast.success("Demo roadmaps restored"); }} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white" title="Reset demo roadmaps"><RotateCcw className="h-4 w-4" /></button>
         </div>
       </div>
 
