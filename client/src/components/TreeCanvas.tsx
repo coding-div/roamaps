@@ -165,6 +165,11 @@ function routeClear(points: Point[], obstacles: Box[], arrowObstacles: Segment[]
   return true;
 }
 
+function blockingObstacles(points: Point[], obstacles: Box[]): Box[] {
+  const segments = toSegments(points);
+  return obstacles.filter((obstacle) => segments.some((segment) => !segmentClear(segment.a, segment.b, [obstacle])));
+}
+
 function routeLength(points: Point[]): number {
   return points.slice(1).reduce((total, point, index) => total + Math.abs(point.x - points[index].x) + Math.abs(point.y - points[index].y), 0);
 }
@@ -215,7 +220,7 @@ function applyReverseLane(route: Route, source: NodeData, target: NodeData, sour
   return route;
 }
 
-function getOrthogonalRoute(source: NodeData, target: NodeData, sourceBox: Box, targetBox: Box, obstacles: Box[], arrowObstacles: Segment[] = []): Route {
+export function getOrthogonalRoute(source: NodeData, target: NodeData, sourceBox: Box, targetBox: Box, obstacles: Box[], arrowObstacles: Segment[] = []): Route {
   const dx = target.x - source.x;
   const dy = target.y - source.y;
   if (source.y === target.y && dx !== 0) {
@@ -238,6 +243,22 @@ function getOrthogonalRoute(source: NodeData, target: NodeData, sourceBox: Box, 
   const pairs: Array<[Direction, Direction]> = [];
   for (const sourceDirection of ordered) for (const targetDirection of ordered) pairs.push([sourceDirection, targetDirection]);
   const candidates: Array<{ points: Point[]; targetDirection: Direction; cost: number; clean: boolean }> = [];
+  const candidateKeys = new Set<string>();
+
+  function evaluateCandidate(rawPoints: Point[], targetDirection: Direction): void {
+    const points = simplifyPoints(rawPoints);
+    const key = `${targetDirection}:${points.map((point) => `${point.x},${point.y}`).join(";")}`;
+    if (candidateKeys.has(key)) return;
+    candidateKeys.add(key);
+    const clear = routeClear(points, obstacles, arrowObstacles);
+    const selfClear = !routeHasSelfConflict(points);
+    const finalSegment = points[points.length - 1] && points[points.length - 2]
+      ? Math.abs(points[points.length - 1].x - points[points.length - 2].x) + Math.abs(points[points.length - 1].y - points[points.length - 2].y)
+      : 0;
+    const clean = clear && selfClear && finalSegment >= MIN_ARROW_SEGMENT;
+    const obstaclePenalty = clean ? 0 : 100000;
+    candidates.push({ points, targetDirection, cost: routeLength(points) + points.length * 10 + obstaclePenalty, clean });
+  }
 
   for (const [sourceDirection, targetDirection] of pairs) {
     const start = getPort(source, sourceBox, sourceDirection);
@@ -249,15 +270,28 @@ function getOrthogonalRoute(source: NodeData, target: NodeData, sourceBox: Box, 
       [start, startOut, { x: startOut.x, y: endIn.y }, endIn, end],
     ];
     for (const rawPoints of connectors) {
-      const points = simplifyPoints(rawPoints);
-      const clear = routeClear(points, obstacles, arrowObstacles);
-      const selfClear = !routeHasSelfConflict(points);
-      const finalSegment = points[points.length - 1] && points[points.length - 2]
-        ? Math.abs(points[points.length - 1].x - points[points.length - 2].x) + Math.abs(points[points.length - 1].y - points[points.length - 2].y)
-        : 0;
-      const clean = clear && selfClear && finalSegment >= MIN_ARROW_SEGMENT;
-      const obstaclePenalty = clean ? 0 : 100000;
-      candidates.push({ points, targetDirection, cost: routeLength(points) + points.length * 10 + obstaclePenalty, clean });
+      evaluateCandidate(rawPoints, targetDirection);
+
+      // Obsidian Cartography routing: when a basic one-corner connector meets a
+      // third node, try the four clearance lanes immediately around that node.
+      // These extra two-turn routes are generated only for blockers of this
+      // connector, avoiding a whole-canvas search on every drag frame.
+      for (const obstacle of blockingObstacles(simplifyPoints(rawPoints), obstacles)) {
+        const laneXs = [
+          obstacle.x - OBSTACLE_PADDING - 2,
+          obstacle.x + obstacle.w + OBSTACLE_PADDING + 2,
+        ];
+        const laneYs = [
+          obstacle.y - OBSTACLE_PADDING - 2,
+          obstacle.y + obstacle.h + OBSTACLE_PADDING + 2,
+        ];
+        for (const laneX of laneXs) {
+          evaluateCandidate([start, startOut, { x: laneX, y: startOut.y }, { x: laneX, y: endIn.y }, endIn, end], targetDirection);
+        }
+        for (const laneY of laneYs) {
+          evaluateCandidate([start, startOut, { x: startOut.x, y: laneY }, { x: endIn.x, y: laneY }, endIn, end], targetDirection);
+        }
+      }
     }
   }
 
@@ -807,8 +841,8 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
         <button onClick={() => { setConnectMode((mode) => !mode); setAddNodeMode(false); setConnectSourceId(null); setPlacementPreview(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${connectMode ? "border-[#3B82F6] bg-[#3B82F6]/15 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#3B82F6]/60 hover:text-white"}`} title="Connect two nodes"><Link2 className="h-4 w-4" /><span>{connectMode ? (connectSourceId ? "Select target" : "Select source") : "Connect nodes"}</span></button>
         {connectMode && <button onClick={() => { setConnectMode(false); setConnectSourceId(null); }} className="rounded-lg border border-[#2a2a35] bg-[#13131a] p-2 text-[#8a8a95] hover:text-white" title="Cancel connection mode"><MousePointer2 className="h-4 w-4" /></button>}
         <div className="flex items-center gap-1 rounded-lg border border-[#2a2a35] bg-[#13131a] p-1">
-          <button onClick={() => dispatch({ type: "UNDO" })} disabled={!canUndo} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white disabled:cursor-not-allowed disabled:opacity-35" title="Undo"><Undo2 className="h-4 w-4" /></button>
-          <button onClick={() => dispatch({ type: "REDO" })} disabled={!canRedo} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white disabled:cursor-not-allowed disabled:opacity-35" title="Redo"><Redo2 className="h-4 w-4" /></button>
+          <button onClick={() => { if (canUndo) dispatch({ type: "UNDO" }); }} disabled={!canUndo} aria-disabled={!canUndo} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white disabled:pointer-events-none disabled:cursor-not-allowed disabled:text-[#4a4a56] disabled:hover:bg-transparent disabled:hover:text-[#4a4a56]" title="Undo"><Undo2 className="h-4 w-4" /></button>
+          <button onClick={() => { if (canRedo) dispatch({ type: "REDO" }); }} disabled={!canRedo} aria-disabled={!canRedo} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white disabled:pointer-events-none disabled:cursor-not-allowed disabled:text-[#4a4a56] disabled:hover:bg-transparent disabled:hover:text-[#4a4a56]" title="Redo"><Redo2 className="h-4 w-4" /></button>
           <button onClick={() => { setConnectMode(false); setConnectSourceId(null); dispatch({ type: "RESET" }); toast.success("Demo roadmaps restored"); }} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white" title="Reset demo roadmaps"><RotateCcw className="h-4 w-4" /></button>
         </div>
       </div>

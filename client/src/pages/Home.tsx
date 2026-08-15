@@ -46,9 +46,15 @@ export default function Home() {
       <div className="pointer-events-none absolute inset-y-0 right-0 hidden w-[56%] bg-cover bg-center opacity-50 lg:block" style={{ backgroundImage: "url('/manus-storage/roamaps-canvas-constellation_dcda31e9.png')" }} />
 
       <header className="relative z-10 flex items-center justify-between px-6 pt-7 sm:px-10 lg:px-14">
-        <div className="flex items-center gap-3">
-          <img src="/manus-storage/roamaps-mark_a6c218e4.png" alt="Roamaps mark" className="h-9 w-9 object-contain" />
-          <span className="font-['Space_Grotesk',sans-serif] text-lg font-semibold tracking-[-0.065em]"><span className="mr-[1px] text-[#4c7dff]">R</span>oamaps</span>
+        <div className="flex items-center gap-3.5" aria-label="Roamaps — visual thinking instrument">
+          <div className="relative flex h-10 w-10 items-center justify-center border border-[#31466f]/70 bg-[#0c1019] shadow-[inset_0_0_0_1px_rgba(76,125,255,0.08)]">
+            <img src="/manus-storage/roamaps-mark_a6c218e4.png" alt="" className="h-7 w-7 object-contain" />
+            <span className="absolute -bottom-px -right-px h-1.5 w-1.5 bg-[#4c7dff]" />
+          </div>
+          <div className="flex flex-col gap-0.5 leading-none">
+            <span className="font-['Space_Grotesk',sans-serif] text-[1.08rem] font-semibold tracking-[-0.085em]"><span className="mr-[1px] text-[#6f92ff]">R</span>oamaps</span>
+            <span className="font-mono text-[7px] uppercase tracking-[0.24em] text-[#5e6a88]">Route archive</span>
+          </div>
         </div>
         <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-[#596073]">Local canvas / v1</span>
       </header>

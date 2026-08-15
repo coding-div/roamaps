@@ -68,6 +68,5 @@ The mark is a compact three-node route glyph: two cobalt points offset around a 
 - The published project should preserve the original dark canvas editor rather than introduce a generic marketing shell.
 - Generated artwork is used sparingly: the logo mark anchors the brand, the constellation supports the landing hero, and tree illustrations appear only as roadmap previews.
 - The local-first model remains the product truth: users can build immediately without login, and changes remain stored in their browser.
-- The foundation editor must carry the cartographic system with equal conviction: full-bleed graphite canvas, fine coordinate structure, compact edge controls, a quiet status rail, and cobalt reserved for action and focus.
-- Roadmap cards and popup documents should read as working map-sheet artifacts through annotation hierarchy, route-marker details, and calm directional copy rather than generic SaaS language.
-- The centered NodePopup is a document surface, not a generic modal: its heading identifies the plotted node, its cobalt edge marks focus, and its plain-text body remains the visual center of the interaction.
+- The Roamaps identity remains a route-glyph-plus-custom-tight wordmark lockup; it must feel like a map instrument label rather than a default text logo.
+- The editor must retain a visible cartographic structure layer—fine coordinate grid, node topology, route lines, or the status rail—even when the map is otherwise sparse.
