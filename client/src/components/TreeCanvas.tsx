@@ -23,6 +23,7 @@ import {
   type Point,
 } from "@/lib/collision";
 import { useRoadmaps } from "@/contexts/RoadmapContext";
+import { findProgressivePrototypeRoute, type PrototypeNode } from "@/lib/progressiveRouter";
 import { toast } from "sonner";
 import { Home, Link2, Minus, MousePointer2, Plus, Redo2, RotateCcw, Undo2 } from "lucide-react";
 import ActionPanel from "./ActionPanel";
@@ -37,10 +38,8 @@ const FONT_SIZE = 12;
 const LINE_HEIGHT = 18;
 const ROOT_FONT_SIZE = 14;
 const ROUTE_CLEARANCE = 18;
-const OBSTACLE_PADDING = 10;
 const ARROW_LENGTH = 9;
 const ARROW_WIDTH = 5;
-const MIN_ARROW_SEGMENT = ARROW_LENGTH + 6;
 const ARROW_PRESS_MOVE_THRESHOLD = 10;
 const LANE_GAP = 12;
 
@@ -88,18 +87,6 @@ function getPort(node: NodeData, box: Box, direction: Direction): Point {
   return { x: node.x + box.w / 2, y: node.y };
 }
 
-function movePoint(point: Point, direction: Direction, distance: number): Point {
-  if (direction === "up") return { x: point.x, y: point.y - distance };
-  if (direction === "down") return { x: point.x, y: point.y + distance };
-  if (direction === "left") return { x: point.x - distance, y: point.y };
-  return { x: point.x + distance, y: point.y };
-}
-
-function directionFromTo(a: Point, b: Point): Direction {
-  if (Math.abs(b.x - a.x) >= Math.abs(b.y - a.y)) return b.x >= a.x ? "right" : "left";
-  return b.y >= a.y ? "down" : "up";
-}
-
 function isHorizontal(segment: Segment): boolean { return segment.a.y === segment.b.y; }
 
 function overlapLength(a1: number, a2: number, b1: number, b2: number): number {
@@ -137,41 +124,6 @@ function simplifyPoints(points: Point[]): Point[] {
     } else result.push(point);
   }
   return result;
-}
-
-function pointInsideRect(point: Point, rect: Box, padding = 0): boolean {
-  return point.x > rect.x - padding && point.x < rect.x + rect.w + padding && point.y > rect.y - padding && point.y < rect.y + rect.h + padding;
-}
-
-function segmentClear(a: Point, b: Point, obstacles: Box[], arrowObstacles: Segment[] = []): boolean {
-  if (a.x !== b.x && a.y !== b.y) return false;
-  for (const obstacle of obstacles) {
-    if (a.x === b.x) {
-      const yMin = Math.min(a.y, b.y);
-      const yMax = Math.max(a.y, b.y);
-      if (a.x > obstacle.x - OBSTACLE_PADDING && a.x < obstacle.x + obstacle.w + OBSTACLE_PADDING && yMax > obstacle.y - OBSTACLE_PADDING && yMin < obstacle.y + obstacle.h + OBSTACLE_PADDING) return false;
-    } else {
-      const xMin = Math.min(a.x, b.x);
-      const xMax = Math.max(a.x, b.x);
-      if (a.y > obstacle.y - OBSTACLE_PADDING && a.y < obstacle.y + obstacle.h + OBSTACLE_PADDING && xMax > obstacle.x - OBSTACLE_PADDING && xMin < obstacle.x + obstacle.w + OBSTACLE_PADDING) return false;
-    }
-  }
-  if (arrowObstacles.some((obstacle) => parallelSegmentConflict({ a, b }, obstacle))) return false;
-  return true;
-}
-
-function routeClear(points: Point[], obstacles: Box[], arrowObstacles: Segment[] = []): boolean {
-  for (let i = 0; i < points.length - 1; i++) if (!segmentClear(points[i], points[i + 1], obstacles, arrowObstacles)) return false;
-  return true;
-}
-
-function blockingObstacles(points: Point[], obstacles: Box[]): Box[] {
-  const segments = toSegments(points);
-  return obstacles.filter((obstacle) => segments.some((segment) => !segmentClear(segment.a, segment.b, [obstacle])));
-}
-
-function routeLength(points: Point[]): number {
-  return points.slice(1).reduce((total, point, index) => total + Math.abs(point.x - points[index].x) + Math.abs(point.y - points[index].y), 0);
 }
 
 function routeFromPoints(points: Point[], targetDirection: Direction, clean = true): Route {
@@ -220,84 +172,25 @@ function applyReverseLane(route: Route, source: NodeData, target: NodeData, sour
   return route;
 }
 
+function nodeToPrototype(node: NodeData, box: Box): PrototypeNode {
+  return { id: node.id, x: node.x, y: node.y, box };
+}
+
+function noRoute(): Route {
+  return { points: [], path: "", targetDirection: "left", midpoint: { x: 0, y: 0 }, clean: false };
+}
+
 export function getOrthogonalRoute(source: NodeData, target: NodeData, sourceBox: Box, targetBox: Box, obstacles: Box[], arrowObstacles: Segment[] = []): Route {
-  const dx = target.x - source.x;
-  const dy = target.y - source.y;
-  if (source.y === target.y && dx !== 0) {
-    const sourceDirection: Direction = dx > 0 ? "right" : "left";
-    const targetDirection: Direction = dx > 0 ? "left" : "right";
-    const start = getPort(source, sourceBox, sourceDirection);
-    const end = getPort(target, targetBox, targetDirection);
-    if (segmentClear(start, end, obstacles, arrowObstacles) && Math.abs(end.x - start.x) + Math.abs(end.y - start.y) >= MIN_ARROW_SEGMENT) return routeFromPoints([start, end], targetDirection);
-  }
-  if (source.x === target.x && dy !== 0) {
-    const sourceDirection: Direction = dy > 0 ? "down" : "up";
-    const targetDirection: Direction = dy > 0 ? "up" : "down";
-    const start = getPort(source, sourceBox, sourceDirection);
-    const end = getPort(target, targetBox, targetDirection);
-    if (segmentClear(start, end, obstacles, arrowObstacles) && Math.abs(end.x - start.x) + Math.abs(end.y - start.y) >= MIN_ARROW_SEGMENT) return routeFromPoints([start, end], targetDirection);
-  }
-  const horizontalFirst: Direction[] = dx >= 0 ? ["right", "left", "down", "up"] : ["left", "right", "up", "down"];
-  const verticalFirst: Direction[] = dy >= 0 ? ["down", "up", "right", "left"] : ["up", "down", "left", "right"];
-  const ordered = Math.abs(dx) >= Math.abs(dy) ? horizontalFirst : verticalFirst;
-  const pairs: Array<[Direction, Direction]> = [];
-  for (const sourceDirection of ordered) for (const targetDirection of ordered) pairs.push([sourceDirection, targetDirection]);
-  const candidates: Array<{ points: Point[]; targetDirection: Direction; cost: number; clean: boolean }> = [];
-  const candidateKeys = new Set<string>();
+  const result = findProgressivePrototypeRoute(
+    nodeToPrototype(source, sourceBox),
+    nodeToPrototype(target, targetBox),
+    obstacles,
+    { maxBends: 5 },
+  );
+  if (!result.found || !result.targetDirection) return noRoute();
 
-  function evaluateCandidate(rawPoints: Point[], targetDirection: Direction): void {
-    const points = simplifyPoints(rawPoints);
-    const key = `${targetDirection}:${points.map((point) => `${point.x},${point.y}`).join(";")}`;
-    if (candidateKeys.has(key)) return;
-    candidateKeys.add(key);
-    const clear = routeClear(points, obstacles, arrowObstacles);
-    const selfClear = !routeHasSelfConflict(points);
-    const finalSegment = points[points.length - 1] && points[points.length - 2]
-      ? Math.abs(points[points.length - 1].x - points[points.length - 2].x) + Math.abs(points[points.length - 1].y - points[points.length - 2].y)
-      : 0;
-    const clean = clear && selfClear && finalSegment >= MIN_ARROW_SEGMENT;
-    const obstaclePenalty = clean ? 0 : 100000;
-    candidates.push({ points, targetDirection, cost: routeLength(points) + points.length * 10 + obstaclePenalty, clean });
-  }
-
-  for (const [sourceDirection, targetDirection] of pairs) {
-    const start = getPort(source, sourceBox, sourceDirection);
-    const end = getPort(target, targetBox, targetDirection);
-    const startOut = movePoint(start, sourceDirection, ROUTE_CLEARANCE);
-    const endIn = movePoint(end, targetDirection, ROUTE_CLEARANCE);
-    const connectors: Point[][] = [
-      [start, startOut, { x: endIn.x, y: startOut.y }, endIn, end],
-      [start, startOut, { x: startOut.x, y: endIn.y }, endIn, end],
-    ];
-    for (const rawPoints of connectors) {
-      evaluateCandidate(rawPoints, targetDirection);
-
-      // Obsidian Cartography routing: when a basic one-corner connector meets a
-      // third node, try the four clearance lanes immediately around that node.
-      // These extra two-turn routes are generated only for blockers of this
-      // connector, avoiding a whole-canvas search on every drag frame.
-      for (const obstacle of blockingObstacles(simplifyPoints(rawPoints), obstacles)) {
-        const laneXs = [
-          obstacle.x - OBSTACLE_PADDING - 2,
-          obstacle.x + obstacle.w + OBSTACLE_PADDING + 2,
-        ];
-        const laneYs = [
-          obstacle.y - OBSTACLE_PADDING - 2,
-          obstacle.y + obstacle.h + OBSTACLE_PADDING + 2,
-        ];
-        for (const laneX of laneXs) {
-          evaluateCandidate([start, startOut, { x: laneX, y: startOut.y }, { x: laneX, y: endIn.y }, endIn, end], targetDirection);
-        }
-        for (const laneY of laneYs) {
-          evaluateCandidate([start, startOut, { x: startOut.x, y: laneY }, { x: endIn.x, y: laneY }, endIn, end], targetDirection);
-        }
-      }
-    }
-  }
-
-  const best = candidates.filter((candidate) => candidate.clean).sort((a, b) => a.cost - b.cost)[0] ?? candidates.sort((a, b) => a.cost - b.cost)[0];
-  const points = best?.points ?? [getPort(source, sourceBox, "right"), getPort(target, targetBox, "left")];
-  return routeFromPoints(points, best?.targetDirection ?? "left", Boolean(best?.clean));
+  const clean = !routeHasSelfConflict(result.points) && !routeHasArrowConflict(result.points, arrowObstacles);
+  return routeFromPoints(result.points, result.targetDirection, clean);
 }
 
 function toSegments(points: Point[]): Segment[] {
@@ -389,10 +282,12 @@ export function buildDerivedRoutes(tree: TreeMap, override?: { nodeId: string; x
     const reverseKey = `${target.id}->${source.id}`;
     const arrowObstacles = reservedRoutes.filter((entry) => entry.key !== reverseKey).flatMap((entry) => entry.segments);
     const baseRoute = getOrthogonalRoute(sourceNode, targetNode, sourceBox, targetBox, obstacleBoxes, arrowObstacles);
-    const laneRoute = applyReverseLane(baseRoute, sourceNode, targetNode, sourceBox, targetBox, getReverseLane(source, target, orderedEdges));
+    const laneRoute = baseRoute.points.length < 2
+      ? baseRoute
+      : applyReverseLane(baseRoute, sourceNode, targetNode, sourceBox, targetBox, getReverseLane(source, target, orderedEdges));
     const clean = laneRoute.clean && !routeHasSelfConflict(laneRoute.points) && !routeHasArrowConflict(laneRoute.points, arrowObstacles);
     const route = clean === laneRoute.clean ? laneRoute : { ...laneRoute, clean };
-    reservedRoutes.push({ key: routeKey(source.id, target.id), segments: toSegments(route.points) });
+    if (route.points.length >= 2) reservedRoutes.push({ key: routeKey(source.id, target.id), segments: toSegments(route.points) });
     return { source, target, sourceNode, targetNode, route };
   });
 }
@@ -764,6 +659,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
 
   function renderEdges(): ReactNode[] {
     return routes.map(({ source, target, route }, index) => {
+      if (route.points.length < 2) return null;
       const arrowColor = source.children.find((child) => child.targetId === target.id)?.color ?? "blue";
       const key = `${tree.id}-${source.id}-${target.id}`;
       return (
@@ -783,6 +679,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
 
   function renderArrowheads(): ReactNode[] {
     return routes.map(({ source, target, route }) => {
+      if (route.points.length < 2) return null;
       const arrowColor = source.children.find((child) => child.targetId === target.id)?.color ?? "blue";
       const key = `${tree.id}-${source.id}-${target.id}-head`;
       return <polygon key={key} points={getArrowHead(route)} fill={VIBGYOR_COLORS[arrowColor]} opacity={route.clean ? 0.9 : 0.55} pointerEvents="none" />;
