@@ -23,7 +23,7 @@ import {
   type Point,
 } from "@/lib/collision";
 import { useRoadmaps } from "@/contexts/RoadmapContext";
-import { findProgressivePrototypeRoute, type PrototypeNode, type PrototypePort, type PrototypeSegment } from "@/lib/progressiveRouter";
+import { findProgressivePrototypeRoute, PrototypeLaneIndex, type PrototypeNode, type PrototypePort, type PrototypeSegment } from "@/lib/progressiveRouter";
 import { toast } from "sonner";
 import { Home, Link2, Minus, MousePointer2, Plus, Redo2, RotateCcw, Undo2 } from "lucide-react";
 import ActionPanel from "./ActionPanel";
@@ -49,7 +49,7 @@ interface Segment { a: Point; b: Point }
 interface Route { points: Point[]; path: string; targetDirection: Direction; midpoint: Point; clean: boolean }
 interface DragState { nodeId: string; pointerId: number; startX: number; startY: number; moved: boolean; x: number; y: number; baselineRoutes: Map<string, Route> }
 interface ArrowPressState { pointerId: number; startX: number; startY: number }
-interface DragPreview { nodeId: string; x: number; y: number; valid: boolean; invalidReason: "node-overlap" | "route-lane" | null }
+interface DragPreview { nodeId: string; x: number; y: number; valid: boolean; invalidReason: "node-overlap" | "route-lane" | null; routes: DerivedRoute[] }
 interface PlacementPreview { x: number; y: number; valid: boolean }
 type PanelTarget = { type: "node"; nodeId: string } | { type: "arrow"; sourceId: string; targetId: string };
 
@@ -164,11 +164,12 @@ function buildEdgePortPlans(
   const endpoints: PlannedEndpoint[] = edges.flatMap(({ source, target }) => {
     const key = routeKey(source.id, target.id);
     const fanout = fanoutPlacements.get(key);
-    // Obsidian Cartography routing: expose every legal endpoint-side pair to
-    // the router so it can rank complete paths by legality, bends, and length.
-    // A grouped fan-out keeps only its shared source-facing side, preserving
-    // evenly spaced, centre-outward exits; targets remain independently free.
-    const sourceDirections = fanout ? [fanout.direction] : PORT_DIRECTIONS;
+    // Obsidian Cartography routing: every edge first exits the source through
+    // its geometrically nearest side, then evaluates every target side. This
+    // preserves the approved node → closest-side → position priority while
+    // retaining adjacent-side one-bend routes without multiplying each dense
+    // Tree 2 search by four. A fan-out still uses its shared facing source side.
+    const sourceDirections = [fanout?.direction ?? directionTowards(source, target)];
     const targetDirections = PORT_DIRECTIONS;
     return [
       ...sourceDirections.map((direction) => ({
@@ -249,8 +250,11 @@ function routeHasSelfConflict(points: Point[]): boolean {
   return false;
 }
 
-function routeHasArrowConflict(points: Point[], arrowObstacles: Segment[]): boolean {
-  return toSegments(points).some((segment) => arrowObstacles.some((obstacle) => parallelSegmentConflict(segment, obstacle)));
+function routeHasArrowConflict(points: Point[], arrowObstacles: Segment[], arrowLaneIndex?: PrototypeLaneIndex): boolean {
+  return toSegments(points).some((segment) => {
+    const nearby = arrowLaneIndex ? arrowLaneIndex.query(segment.a, segment.b, LANE_GAP / 2) : arrowObstacles;
+    return nearby.some((obstacle) => parallelSegmentConflict(segment, obstacle));
+  });
 }
 
 function simplifyPoints(points: Point[]): Point[] {
@@ -328,6 +332,7 @@ export function getOrthogonalRoute(
   obstacles: Box[],
   arrowObstacles: Segment[] = [],
   portPlan?: EdgePortPlan,
+  arrowLaneIndex?: PrototypeLaneIndex,
 ): Route {
   const sourcePorts = portPlan?.sourcePorts ?? [midpointPort(source, sourceBox, directionTowards(source, target))];
   // Target sides deliberately remain independent for ordinary edges. The
@@ -348,18 +353,20 @@ export function getOrthogonalRoute(
   const result = primaryResult.found ? primaryResult : midpointResult;
   if (!result || !result.found || !result.targetDirection) return noRoute();
 
-  const baseRoute = routeFromPoints(result.points, result.targetDirection, !routeHasSelfConflict(result.points) && !routeHasArrowConflict(result.points, arrowObstacles));
-  if (baseRoute.clean || arrowObstacles.length === 0) return baseRoute;
+  const hasArrowObstacles = arrowObstacles.length > 0 || (arrowLaneIndex?.size ?? 0) > 0;
+  const baseRoute = routeFromPoints(result.points, result.targetDirection, !routeHasSelfConflict(result.points) && !routeHasArrowConflict(result.points, arrowObstacles, arrowLaneIndex));
+  if (baseRoute.clean || !hasArrowObstacles) return baseRoute;
 
   const repaired = findProgressivePrototypeRoute(nodeToPrototype(source, sourceBox), nodeToPrototype(target, targetBox), obstacles, {
     maxBends: 2,
     sourcePorts,
     targetPorts,
     arrowObstacles: arrowObstacles as PrototypeSegment[],
+    arrowObstacleIndex: arrowLaneIndex ?? new PrototypeLaneIndex(arrowObstacles as PrototypeSegment[]),
     lanePadding: LANE_GAP / 2,
   });
   if (!repaired.found || !repaired.targetDirection) return baseRoute;
-  return routeFromPoints(repaired.points, repaired.targetDirection, !routeHasSelfConflict(repaired.points));
+  return routeFromPoints(repaired.points, repaired.targetDirection, !routeHasSelfConflict(repaired.points) && !routeHasArrowConflict(repaired.points, arrowObstacles, arrowLaneIndex));
 }
 
 function toSegments(points: Point[]): Segment[] {
@@ -433,7 +440,7 @@ interface DerivedRoute {
   route: Route;
 }
 
-export function buildDerivedRoutes(tree: TreeMap, override?: { nodeId: string; x: number; y: number }): DerivedRoute[] {
+export function buildDerivedRoutes(tree: TreeMap, override?: { nodeId: string; x: number; y: number }, routeTimings?: number[]): DerivedRoute[] {
   const nodes = getNodesFromTree(tree);
   const edges = getEdgesFromTree(tree);
   const rootId = tree.root?.id ?? null;
@@ -446,20 +453,32 @@ export function buildDerivedRoutes(tree: TreeMap, override?: { nodeId: string; x
   const portPlans = buildEdgePortPlans(positionedEdges, boxes, fanoutPlacements);
   const reservationEdges = [...positionedEdges].sort((a, b) => compareFanoutReservation(a, b, fanoutPlacements));
   const reservedRoutes: Array<{ key: string; segments: Segment[] }> = [];
+  const reservedLaneIndex = new PrototypeLaneIndex();
   const routesByKey = new Map<string, DerivedRoute>();
   for (const { source: sourceNode, target: targetNode } of reservationEdges) {
     const sourceBox = boxes.get(sourceNode.id)!;
     const targetBox = boxes.get(targetNode.id)!;
     const obstacleBoxes = displayNodes.filter((node) => node.id !== sourceNode.id && node.id !== targetNode.id).map((node) => boxes.get(node.id)!);
     const reverseKey = `${targetNode.id}->${sourceNode.id}`;
-    const arrowObstacles = reservedRoutes.filter((entry) => entry.key !== reverseKey).flatMap((entry) => entry.segments);
-    const baseRoute = getOrthogonalRoute(sourceNode, targetNode, sourceBox, targetBox, obstacleBoxes, arrowObstacles, portPlans.get(routeKey(sourceNode.id, targetNode.id)));
+    const reverseReservation = reservedRoutes.find((entry) => entry.key === reverseKey);
+    // A reverse pair remains exempt from its own lane comparison. Only that
+    // uncommon case needs a temporary exact index; all ordinary edges share
+    // the accumulating index instead of rebuilding a flat obstacle list.
+    const arrowObstacles = reverseReservation ? reservedRoutes.filter((entry) => entry.key !== reverseKey).flatMap((entry) => entry.segments) : [];
+    const arrowLaneIndex = reverseReservation ? new PrototypeLaneIndex(arrowObstacles) : reservedLaneIndex;
+    const routeStartedAt = routeTimings ? performance.now() : 0;
+    const baseRoute = getOrthogonalRoute(sourceNode, targetNode, sourceBox, targetBox, obstacleBoxes, arrowObstacles, portPlans.get(routeKey(sourceNode.id, targetNode.id)), arrowLaneIndex);
     const laneRoute = baseRoute.points.length < 2
       ? baseRoute
       : applyReverseLane(baseRoute, sourceNode, targetNode, sourceBox, targetBox, getReverseLane(sourceNode, targetNode, orderedEdges));
-    const clean = laneRoute.clean && !routeHasSelfConflict(laneRoute.points) && !routeHasArrowConflict(laneRoute.points, arrowObstacles);
+    const clean = laneRoute.clean && !routeHasSelfConflict(laneRoute.points) && !routeHasArrowConflict(laneRoute.points, arrowObstacles, arrowLaneIndex);
     const route = clean === laneRoute.clean ? laneRoute : { ...laneRoute, clean };
-    if (route.points.length >= 2) reservedRoutes.push({ key: routeKey(sourceNode.id, targetNode.id), segments: toSegments(route.points) });
+    if (route.points.length >= 2) {
+      const segments = toSegments(route.points);
+      reservedRoutes.push({ key: routeKey(sourceNode.id, targetNode.id), segments });
+      segments.forEach((segment) => reservedLaneIndex.add(segment));
+    }
+    if (routeTimings) routeTimings.push(performance.now() - routeStartedAt);
     routesByKey.set(routeKey(sourceNode.id, targetNode.id), { source: sourceNode, target: targetNode, sourceNode, targetNode, route });
   }
   return orderedEdges.map(({ source, target }) => routesByKey.get(routeKey(source.id, target.id))!);
@@ -489,6 +508,10 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressActive = useRef(false);
   const arrowPressRef = useRef<ArrowPressState | null>(null);
+  // The committed route set is calculated once per roadmap change. Pointer
+  // handlers and render reuse it so a dense Tree 2 long press never starts by
+  // synchronously deriving all routes a second time.
+  const committedRoutes = useMemo(() => buildDerivedRoutes(tree), [tree]);
 
   const worldPoint = useCallback((clientX: number, clientY: number): Point | null => {
     const svg = svgRef.current;
@@ -526,7 +549,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     }
     const rootId = tree.root?.id ?? null;
     const boxes = nodes.map((node) => getNodeBox(node, node.id === rootId));
-    const contentRoutes = buildDerivedRoutes(tree);
+    const contentRoutes = committedRoutes;
     const points = [...boxes.flatMap((box) => [{ x: box.x, y: box.y }, { x: box.x + box.w, y: box.y + box.h }]), ...contentRoutes.flatMap(({ route }) => route.points)];
     const minX = Math.min(...points.map((point) => point.x));
     const maxX = Math.max(...points.map((point) => point.x));
@@ -539,7 +562,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     const width = Math.max(contentW, contentH * aspect);
     const height = Math.max(contentH, contentW / Math.max(aspect, 0.1));
     setViewBox({ x: (minX + maxX - width) / 2, y: (minY + maxY - height) / 2, w: width, h: height });
-  }, [tree, resetView]);
+  }, [tree, resetView, committedRoutes]);
 
   const endLongPress = useCallback(() => {
     longPressActive.current = false;
@@ -588,7 +611,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       } else {
         testSource.children.push({ targetId: nodeId, color: "blue" });
         const testTree = { ...tree, nodeMap: testNodeMap, root: tree.root ? testNodeMap[tree.root.id] ?? null : null };
-        const baselineRoutes = new Map(buildDerivedRoutes(tree).map(({ source, target, route }) => [routeKey(source.id, target.id), route]));
+        const baselineRoutes = new Map(committedRoutes.map(({ source, target, route }) => [routeKey(source.id, target.id), route]));
         const introducesProblems = introducesNewRouteProblems(baselineRoutes, buildDerivedRoutes(testTree));
         if (introducesProblems) toast.message("Route would disrupt existing arrows", { description: "Move a node or choose another direction before adding this arrow." });
         else {
@@ -651,7 +674,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     }
     const point = worldPoint(e.clientX, e.clientY);
     if (!point) return;
-    const baselineRoutes = new Map(buildDerivedRoutes(tree).map(({ source, target, route }) => [routeKey(source.id, target.id), route]));
+    const baselineRoutes = new Map(committedRoutes.map(({ source, target, route }) => [routeKey(source.id, target.id), route]));
     dragRef.current = { nodeId: node.id, pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, moved: false, x: node.x, y: node.y, baselineRoutes };
     try {
       e.currentTarget.setPointerCapture?.(e.pointerId);
@@ -683,6 +706,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
           y: candidate.y,
           valid: nodeFits && !routeProblem,
           invalidReason: !nodeFits ? "node-overlap" : routeProblem ? "route-lane" : null,
+          routes: routesForCandidate,
         });
       }
     }
@@ -757,7 +781,13 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     } else if (e.touches.length === 1) {
       const touch = e.touches[0];
       const target = document.elementFromPoint(touch.clientX, touch.clientY);
-      if (target?.closest("[data-node-id]") || target?.closest("[data-arrow-id]")) return;
+      // Node and arrow presses belong to the SVG gesture system. Cancelling the
+      // native touch start here prevents Android from treating a long press as
+      // page-text selection, while leaving ordinary page scrolling untouched.
+      if (target?.closest("[data-node-id]") || target?.closest("[data-arrow-id]")) {
+        e.preventDefault();
+        return;
+      }
       setIsPanning(true);
       panStart.current = { x: touch.clientX, y: touch.clientY };
     }
@@ -822,10 +852,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const positionOverride = dragPosition ? { nodeId: dragPosition.nodeId, x: dragPosition.x, y: dragPosition.y } : undefined;
   const positionOf = (node: NodeData): NodeData => positionOverride?.nodeId === node.id ? { ...node, x: positionOverride.x, y: positionOverride.y } : node;
   const displayNodes = useMemo(() => nodes.map(positionOf), [nodes, positionOverride?.nodeId, positionOverride?.x, positionOverride?.y]);
-  const routes = useMemo(
-    () => buildDerivedRoutes(tree, positionOverride),
-    [tree, positionOverride?.nodeId, positionOverride?.x, positionOverride?.y]
-  );
+  const routes = dragPosition?.routes ?? committedRoutes;
   const bridgePoints = useMemo(() => routes.map((current, index) => {
     const currentSegments = toSegments(current.route.points);
     const crossings: Array<{ point: Point; segment: Segment }> = [];
@@ -904,9 +931,21 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     return () => element.removeEventListener("touchmove", prevent);
   }, []);
 
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const preventNativeSelection = (event: Event) => event.preventDefault();
+    svg.addEventListener("selectstart", preventNativeSelection);
+    svg.addEventListener("dragstart", preventNativeSelection);
+    return () => {
+      svg.removeEventListener("selectstart", preventNativeSelection);
+      svg.removeEventListener("dragstart", preventNativeSelection);
+    };
+  }, []);
+
   return (
-    <div ref={containerRef} className="relative h-full w-full overflow-hidden" style={{ background: "#0a0a0f" }}>
-      <svg ref={svgRef} width="100%" height="100%" viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`} onPointerDown={handleSvgPointerDown} onPointerMove={handleSvgPointerMove} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={() => setIsPanning(false)} onMouseLeave={() => { setIsPanning(false); setPlacementPreview(null); }} onWheel={(e) => { e.preventDefault(); const rect = svgRef.current?.getBoundingClientRect(); if (rect) zoomByFactor(e.deltaY > 0 ? 1.12 : 0.89, (e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height); }} onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={() => { setIsPanning(false); isPinching.current = false; initialPinchDistance.current = null; }} style={{ cursor: addNodeMode ? "crosshair" : isPanning ? "grabbing" : "grab", touchAction: "none" }}>
+    <div ref={containerRef} className="relative h-full w-full select-none overflow-hidden" style={{ background: "#0a0a0f", userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none" }}>
+      <svg ref={svgRef} width="100%" height="100%" viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`} onPointerDown={handleSvgPointerDown} onPointerMove={handleSvgPointerMove} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={() => setIsPanning(false)} onMouseLeave={() => { setIsPanning(false); setPlacementPreview(null); }} onContextMenu={(e) => e.preventDefault()} onWheel={(e) => { e.preventDefault(); const rect = svgRef.current?.getBoundingClientRect(); if (rect) zoomByFactor(e.deltaY > 0 ? 1.12 : 0.89, (e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height); }} onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={() => { setIsPanning(false); isPinching.current = false; initialPinchDistance.current = null; }} style={{ cursor: addNodeMode ? "crosshair" : isPanning ? "grabbing" : "grab", touchAction: "none", userSelect: "none", WebkitUserSelect: "none" }}>
         <DotGrid />
         <rect width="10000" height="10000" x={-5000} y={-5000} fill="url(#dotGrid)" />
         {renderEdges()}

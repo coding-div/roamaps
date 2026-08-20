@@ -105,6 +105,24 @@ describe("progressiveRouter — staged router", () => {
     expect(result.points.slice(1, -1).some((point) => sourceInterior(point) || targetInterior(point))).toBe(false);
   });
 
+  it("keeps a close Tree 2-style endpoint pair on the exact two-bend fast path", () => {
+    const source = node("source", 200, -100, 100, 36);
+    const target = node("target", 320, -80, 100, 36);
+    const result = findProgressivePrototypeRoute(source, target, [], {
+      sourcePorts: [{ direction: "right", point: { x: 250, y: -94 } }],
+      targetPorts: [{ direction: "left", point: { x: 270, y: -80 } }],
+      maxBends: 5,
+    });
+
+    expectClean(result, 2);
+    expect(result.points).toEqual([
+      { x: 250, y: -94 },
+      { x: 268, y: -94 },
+      { x: 268, y: -80 },
+      { x: 270, y: -80 },
+    ]);
+  });
+
   it("rejects a parallel reserved arrow lane when a two-bend repair cannot reach the fixed ports", () => {
     const result = findProgressivePrototypeRoute(node("a", 100, 300), node("b", 700, 300), [], {
       sourceDirections: ["right"],

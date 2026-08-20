@@ -123,4 +123,18 @@ describe("getOrthogonalRoute", () => {
     expect(upwardCentre.points).toHaveLength(2);
     expect([upwardLeft, upwardRight, leftUpper, leftLower].every((route) => route.points.length === 3)).toBe(true);
   });
+
+  it("keeps repeated dense Tree 2 route derivation within the interaction budget", () => {
+    const tree2 = allTrees.find((tree) => tree.id === "tree-2");
+    expect(tree2).toBeDefined();
+    const startedAt = performance.now();
+
+    for (let run = 0; run < 10; run++) {
+      expect(buildDerivedRoutes(tree2!).length).toBe(43);
+    }
+
+    // This deliberately has generous CI headroom while still rejecting the
+    // former 350–1,000 ms full-map path that froze a tablet drag gesture.
+    expect(performance.now() - startedAt).toBeLessThan(160);
+  });
 });

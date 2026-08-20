@@ -43,6 +43,60 @@ export interface PrototypeSegment {
   b: Point;
 }
 
+/**
+ * Exact uniform-grid lookup for reserved arrow segments. The router still
+ * performs the same parallel-lane test; the index only removes segments that
+ * cannot possibly be close enough to conflict with a candidate segment.
+ */
+export class PrototypeLaneIndex {
+  private readonly buckets = new Map<string, Array<{ index: number; segment: PrototypeSegment }>>();
+  private readonly segments: PrototypeSegment[] = [];
+
+  constructor(initialSegments: PrototypeSegment[] = [], private readonly cellSize = 160) {
+    initialSegments.forEach((segment) => this.add(segment));
+  }
+
+  get size(): number {
+    return this.segments.length;
+  }
+
+  add(segment: PrototypeSegment): void {
+    const index = this.segments.push(segment) - 1;
+    const minColumn = Math.floor(Math.min(segment.a.x, segment.b.x) / this.cellSize);
+    const maxColumn = Math.floor(Math.max(segment.a.x, segment.b.x) / this.cellSize);
+    const minRow = Math.floor(Math.min(segment.a.y, segment.b.y) / this.cellSize);
+    const maxRow = Math.floor(Math.max(segment.a.y, segment.b.y) / this.cellSize);
+    for (let column = minColumn; column <= maxColumn; column += 1) {
+      for (let row = minRow; row <= maxRow; row += 1) {
+        const key = `${column}:${row}`;
+        const bucket = this.buckets.get(key) ?? [];
+        bucket.push({ index, segment });
+        this.buckets.set(key, bucket);
+      }
+    }
+  }
+
+  query(a: Point, b: Point, padding: number): PrototypeSegment[] {
+    const minColumn = Math.floor((Math.min(a.x, b.x) - padding) / this.cellSize);
+    const maxColumn = Math.floor((Math.max(a.x, b.x) + padding) / this.cellSize);
+    const minRow = Math.floor((Math.min(a.y, b.y) - padding) / this.cellSize);
+    const maxRow = Math.floor((Math.max(a.y, b.y) + padding) / this.cellSize);
+    const seen = new Set<number>();
+    const result: Array<{ index: number; segment: PrototypeSegment }> = [];
+    for (let column = minColumn; column <= maxColumn; column += 1) {
+      for (let row = minRow; row <= maxRow; row += 1) {
+        for (const entry of this.buckets.get(`${column}:${row}`) ?? []) {
+          if (!seen.has(entry.index)) {
+            seen.add(entry.index);
+            result.push(entry);
+          }
+        }
+      }
+    }
+    return result.sort((left, right) => left.index - right.index).map((entry) => entry.segment);
+  }
+}
+
 export interface PrototypeOptions {
   /** Search all node sides by default; fixtures may constrain sides deliberately. */
   sourceDirections?: Direction[];
@@ -52,6 +106,8 @@ export interface PrototypeOptions {
   targetPorts?: PrototypePort[];
   /** Optional reserved arrow lanes for a bounded clean-route repair search. */
   arrowObstacles?: PrototypeSegment[];
+  /** Exact nearby-lane lookup for the same reserved arrow segments. */
+  arrowObstacleIndex?: PrototypeLaneIndex;
   lanePadding?: number;
   /** Test-only finite area used to create genuine multi-bend obstacle mazes. */
   bounds?: Box;
@@ -247,9 +303,12 @@ function parallelSegmentConflict(a: Point, b: Point, c: Point, d: Point, padding
   return Math.max(Math.min(a.x, b.x), Math.min(c.x, d.x)) < Math.min(Math.max(a.x, b.x), Math.max(c.x, d.x));
 }
 
-function avoidsArrowLanes(points: Point[], obstacles: PrototypeSegment[] | undefined, padding: number): boolean {
-  if (!obstacles?.length) return true;
-  return points.slice(1).every((point, index) => !obstacles.some((obstacle) => parallelSegmentConflict(points[index], point, obstacle.a, obstacle.b, padding)));
+function avoidsArrowLanes(points: Point[], obstacles: PrototypeSegment[] | undefined, padding: number, index?: PrototypeLaneIndex): boolean {
+  if (!obstacles?.length && !index?.size) return true;
+  return points.slice(1).every((point, segmentIndex) => {
+    const nearby = index ? index.query(points[segmentIndex], point, padding) : obstacles ?? [];
+    return !nearby.some((obstacle) => parallelSegmentConflict(points[segmentIndex], point, obstacle.a, obstacle.b, padding));
+  });
 }
 
 function compareRoutes(a: PrototypeRoute, b: PrototypeRoute): number {
@@ -292,10 +351,14 @@ function findSimpleForPorts(
     points.length < 2 ||
     !isRouteClear(points, obstacles, options.bounds) ||
     !respectsEndpointBodies(points, source, target, sourcePort, targetPort) ||
-    !avoidsArrowLanes(points, options.arrowObstacles, options.lanePadding ?? 6)
+    !avoidsArrowLanes(points, options.arrowObstacles, options.lanePadding ?? 6, options.arrowObstacleIndex)
   ) return null;
   const bends = bendCount(points);
-  if (bends > 1 || distance(points[points.length - 2], end) < PROTOTYPE_MIN_FINAL_SEGMENT) return null;
+  // Endpoint-body validation above is the source of truth. A close but legal
+  // port pair can simplify to a short final visual segment; the multi-bend
+  // search already accepts that same route, so keep it on this exact fast path
+  // rather than rebuilding a large visibility graph for a one-bend result.
+  if (bends > 1) return null;
 
   return {
     found: true,
@@ -336,6 +399,30 @@ function findTwoBendForPorts(
   ).filter((lane, index, values) => values.indexOf(lane) === index).sort((a, b) => a - b);
   const candidates: PrototypeRoute[] = [];
 
+  // When the target port sits just beyond the source clearance, a legal
+  // two-bend route can arrive at the endpoint directly. Requiring a second
+  // clearance point behind that target would make the path backtrack and fall
+  // through to the expensive visibility graph, even though the rendered route
+  // itself is already an exact, endpoint-safe candidate.
+  const directEndpointPoints = sourceHorizontal
+    ? simplify([start, startOut, { x: startOut.x, y: end.y }, end])
+    : simplify([start, startOut, { x: end.x, y: startOut.y }, end]);
+  if (
+    bendCount(directEndpointPoints) === 2 &&
+    isRouteClear(directEndpointPoints, obstacles, options.bounds) &&
+    respectsEndpointBodies(directEndpointPoints, source, target, sourcePort, targetPort) &&
+    avoidsArrowLanes(directEndpointPoints, options.arrowObstacles, options.lanePadding ?? 6, options.arrowObstacleIndex)
+  ) {
+    candidates.push({
+      found: true,
+      points: directEndpointPoints,
+      bends: 2,
+      length: routeLength(directEndpointPoints),
+      sourceDirection: sourcePort.direction,
+      targetDirection: targetPort.direction,
+    });
+  }
+
   for (const lane of lanes) {
     const leavesCorrectly = sourceHorizontal
       ? (sourcePort.direction === "right" ? lane >= startOut.x : lane <= startOut.x)
@@ -352,7 +439,7 @@ function findTwoBendForPorts(
       bendCount(points) !== 2 ||
       !isRouteClear(points, obstacles, options.bounds) ||
       !respectsEndpointBodies(points, source, target, sourcePort, targetPort) ||
-      !avoidsArrowLanes(points, options.arrowObstacles, options.lanePadding ?? 6)
+      !avoidsArrowLanes(points, options.arrowObstacles, options.lanePadding ?? 6, options.arrowObstacleIndex)
     ) continue;
     candidates.push({
       found: true,
@@ -544,7 +631,7 @@ function findForPorts(
         if (
           route.bends <= options.maxBends &&
           respectsEndpointBodies(route.points, source, target, sourcePort, targetPort) &&
-          avoidsArrowLanes(route.points, routeOptions.arrowObstacles, routeOptions.lanePadding ?? 6) &&
+          avoidsArrowLanes(route.points, routeOptions.arrowObstacles, routeOptions.lanePadding ?? 6, routeOptions.arrowObstacleIndex) &&
           (!winner || route.bends < winner.bends || (route.bends === winner.bends && (route.length < winner.length || (route.length === winner.length && pathSignature(route.points) < pathSignature(winner.points)))))
         ) {
           winner = route;
@@ -607,6 +694,22 @@ export function findProgressivePrototypeRoute(
     }
     twoBendCandidates.sort(compareRoutes);
     if (twoBendCandidates[0]) return twoBendCandidates[0];
+  }
+
+  // Callers that request a bounded two-bend repair have already exhausted the
+  // complete zero-, one-, and two-bend candidate families above. Do not build
+  // a visibility graph that can only produce a route outside that repair
+  // contract.
+  if (maxBends <= 2) {
+    return {
+      found: false,
+      points: [],
+      bends: 0,
+      length: 0,
+      sourceDirection: null,
+      targetDirection: null,
+      reason: "no-legal-route",
+    };
   }
 
   // `findForPorts` already ranks every reachable candidate by bend count, then
