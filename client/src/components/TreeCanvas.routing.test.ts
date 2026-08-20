@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getNodeBox } from "@/lib/collision";
-import { allTrees, type NodeData } from "@/lib/treeData";
+import { allTrees, type NodeData, type TreeMap } from "@/lib/treeData";
 import { buildDerivedRoutes, getOrthogonalRoute } from "./TreeCanvas";
 
 function node(id: string, x: number, y: number): NodeData {
@@ -42,5 +42,65 @@ describe("getOrthogonalRoute", () => {
         ).toBe(true);
       }
     }
+  });
+
+  it("chooses an adjacent target side for the shortest legal one-bend L-route", () => {
+    const source = {
+      ...node("source", 0, 0),
+      children: [{ targetId: "target", color: "blue" as const }],
+    };
+    const target = node("target", 180, -120);
+    const tree: TreeMap = {
+      id: "adjacent-side-l",
+      title: "Adjacent-side L",
+      description: "",
+      root: source,
+      nodeMap: { source, target },
+      maxDepth: 1,
+    };
+
+    const [derived] = buildDerivedRoutes(tree);
+    expect(derived.route.clean).toBe(true);
+    expect(derived.route.targetDirection).toBe("down");
+    expect(derived.route.points).toHaveLength(3);
+    expect(derived.route.points[0].x).toBeGreaterThan(source.x);
+    expect(derived.route.points[2].y).toBeGreaterThan(target.y);
+  });
+
+  it("plans three upward children as a stable symmetric fan-out", () => {
+    const source = {
+      ...node("source", 0, 0),
+      children: [
+        { targetId: "right", color: "blue" as const },
+        { targetId: "centre", color: "blue" as const },
+        { targetId: "left", color: "blue" as const },
+      ],
+    };
+    const left = node("left", -180, -200);
+    const centre = node("centre", 0, -200);
+    const right = node("right", 180, -200);
+    const tree: TreeMap = {
+      id: "upward-fan-out",
+      title: "Upward fan-out",
+      description: "",
+      root: source,
+      nodeMap: { source, left, centre, right },
+      maxDepth: 1,
+    };
+
+    const routes = new Map(buildDerivedRoutes(tree).map(({ target, route }) => [target.id, route]));
+    const leftRoute = routes.get("left")!;
+    const centreRoute = routes.get("centre")!;
+    const rightRoute = routes.get("right")!;
+
+    expect([leftRoute, centreRoute, rightRoute].every((route) => route.clean)).toBe(true);
+    expect([leftRoute, centreRoute, rightRoute].every((route) => route.targetDirection === "down")).toBe(true);
+    expect(centreRoute.points).toHaveLength(2);
+    expect(leftRoute.points).toHaveLength(4);
+    expect(rightRoute.points).toHaveLength(4);
+    expect(leftRoute.points[0].x).toBeLessThan(centreRoute.points[0].x);
+    expect(centreRoute.points[0].x).toBeLessThan(rightRoute.points[0].x);
+    expect(leftRoute.points[1].x).toBe(leftRoute.points[0].x);
+    expect(rightRoute.points[1].x).toBe(rightRoute.points[0].x);
   });
 });

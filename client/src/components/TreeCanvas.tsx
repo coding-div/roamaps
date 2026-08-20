@@ -42,6 +42,7 @@ const ARROW_LENGTH = 9;
 const ARROW_WIDTH = 5;
 const ARROW_PRESS_MOVE_THRESHOLD = 10;
 const LANE_GAP = 12;
+const PORT_DIRECTIONS: Direction[] = ["up", "left", "down", "right"];
 
 interface ViewBox { x: number; y: number; w: number; h: number }
 interface Segment { a: Point; b: Point }
@@ -113,38 +114,96 @@ function midpointPort(node: NodeData, box: Box, direction: Direction): Prototype
   return { direction, point: getPort(node, box, direction) };
 }
 
-interface EdgePortPlan { sourcePort: PrototypePort; targetPort: PrototypePort }
-interface PlannedEndpoint { key: string; role: "source" | "target"; node: NodeData; direction: Direction }
+interface EdgePortPlan { sourcePorts: PrototypePort[]; targetPorts: PrototypePort[] }
+interface PlannedEndpoint {
+  key: string;
+  role: "source" | "target";
+  node: NodeData;
+  peer: NodeData;
+  direction: Direction;
+}
+interface FanoutPlacement { groupKey: string; direction: Direction; index: number; total: number }
+
+function compareAlongSide(direction: Direction, a: NodeData, b: NodeData): number {
+  const primary = direction === "up" || direction === "down" ? a.x - b.x : a.y - b.y;
+  const secondary = direction === "up" || direction === "down" ? a.y - b.y : a.x - b.x;
+  return primary || secondary || a.id.localeCompare(b.id);
+}
+
+/**
+ * A group is only constrained when several outgoing arrows leave the same
+ * source toward the same geometric side. Keeping this information separate
+ * from the router lets ordinary edges retain independent target-side choice.
+ */
+function buildFanoutPlacements(edges: Array<{ source: NodeData; target: NodeData }>): Map<string, FanoutPlacement> {
+  const candidates = new Map<string, Array<{ source: NodeData; target: NodeData }>>();
+  for (const edge of edges) {
+    const direction = directionTowards(edge.source, edge.target);
+    const groupKey = `${edge.source.id}:${direction}`;
+    const group = candidates.get(groupKey) ?? [];
+    group.push(edge);
+    candidates.set(groupKey, group);
+  }
+
+  const placements = new Map<string, FanoutPlacement>();
+  for (const [groupKey, group] of Array.from(candidates.entries())) {
+    if (group.length < 2) continue;
+    const direction = groupKey.slice(groupKey.lastIndexOf(":") + 1) as Direction;
+    group
+      .sort((a: { source: NodeData; target: NodeData }, b: { source: NodeData; target: NodeData }) => compareAlongSide(direction, a.target, b.target) || routeKey(a.source.id, a.target.id).localeCompare(routeKey(b.source.id, b.target.id)))
+      .forEach((edge: { source: NodeData; target: NodeData }, index: number) => placements.set(routeKey(edge.source.id, edge.target.id), { groupKey, direction, index, total: group.length }));
+  }
+  return placements;
+}
 
 function buildEdgePortPlans(
   edges: Array<{ source: NodeData; target: NodeData }>,
   boxes: Map<string, Box>,
+  fanoutPlacements: Map<string, FanoutPlacement>,
 ): Map<string, EdgePortPlan> {
   const endpoints: PlannedEndpoint[] = edges.flatMap(({ source, target }) => {
+    const key = routeKey(source.id, target.id);
     const sourceDirection = directionTowards(source, target);
-    const targetDirection = oppositeDirection(sourceDirection);
+    const fanout = fanoutPlacements.get(key);
+    const targetDirections = fanout ? [oppositeDirection(fanout.direction)] : PORT_DIRECTIONS;
     return [
-      { key: routeKey(source.id, target.id), role: "source" as const, node: source, direction: sourceDirection },
-      { key: routeKey(source.id, target.id), role: "target" as const, node: target, direction: targetDirection },
+      {
+        key,
+        role: "source" as const,
+        node: source,
+        peer: target,
+        direction: fanout?.direction ?? sourceDirection,
+      },
+      ...targetDirections.map((direction) => ({
+        key,
+        role: "target" as const,
+        node: target,
+        peer: source,
+        direction,
+      })),
     ];
   });
   const grouped = new Map<string, PlannedEndpoint[]>();
   for (const endpoint of endpoints) {
-    const groupKey = `${endpoint.node.id}:${endpoint.direction}`;
+    const groupKey = `${endpoint.node.id}:${endpoint.role}:${endpoint.direction}`;
     const group = grouped.get(groupKey) ?? [];
     group.push(endpoint);
     grouped.set(groupKey, group);
   }
   const plans = new Map<string, EdgePortPlan>();
   for (const group of Array.from(grouped.values()) as PlannedEndpoint[][]) {
-    group.sort((a: PlannedEndpoint, b: PlannedEndpoint) => a.key.localeCompare(b.key) || a.role.localeCompare(b.role));
+    group.sort((a: PlannedEndpoint, b: PlannedEndpoint) => compareAlongSide(a.direction, a.peer, b.peer) || a.key.localeCompare(b.key));
     group.forEach((endpoint: PlannedEndpoint, index: number) => {
       const box = boxes.get(endpoint.node.id)!;
       const port = evenlySpacedPort(endpoint.node, box, endpoint.direction, index, group.length);
-      const plan = plans.get(endpoint.key) ?? ({} as EdgePortPlan);
-      plan[endpoint.role === "source" ? "sourcePort" : "targetPort"] = port;
+      const plan: EdgePortPlan = plans.get(endpoint.key) ?? { sourcePorts: [], targetPorts: [] };
+      plan[endpoint.role === "source" ? "sourcePorts" : "targetPorts"].push(port);
       plans.set(endpoint.key, plan);
     });
+  }
+  for (const plan of Array.from(plans.values())) {
+    plan.sourcePorts.sort((a: PrototypePort, b: PrototypePort) => PORT_DIRECTIONS.indexOf(a.direction) - PORT_DIRECTIONS.indexOf(b.direction));
+    plan.targetPorts.sort((a: PrototypePort, b: PrototypePort) => PORT_DIRECTIONS.indexOf(a.direction) - PORT_DIRECTIONS.indexOf(b.direction));
   }
   return plans;
 }
@@ -251,19 +310,20 @@ export function getOrthogonalRoute(
   arrowObstacles: Segment[] = [],
   portPlan?: EdgePortPlan,
 ): Route {
-  const sourcePort = portPlan?.sourcePort ?? { direction: directionTowards(source, target), point: getPort(source, sourceBox, directionTowards(source, target)) };
-  const targetPort = portPlan?.targetPort ?? { direction: oppositeDirection(directionTowards(source, target)), point: getPort(target, targetBox, oppositeDirection(directionTowards(source, target))) };
-  const routerOptions = { maxBends: 5, sourcePorts: [sourcePort], targetPorts: [targetPort] };
+  const sourcePorts = portPlan?.sourcePorts ?? [midpointPort(source, sourceBox, directionTowards(source, target))];
+  // Target sides deliberately remain independent for ordinary edges. The
+  // progressive router ranks the legal choices by bend count and path length.
+  const targetPorts = portPlan?.targetPorts ?? PORT_DIRECTIONS.map((direction) => midpointPort(target, targetBox, direction));
+  const routerOptions = { maxBends: 5, sourcePorts, targetPorts };
   const primaryResult = findProgressivePrototypeRoute(nodeToPrototype(source, sourceBox), nodeToPrototype(target, targetBox), obstacles, routerOptions);
-  // A planned edge keeps its chosen sides. If its evenly spaced positions are
-  // blocked, try those same sides at their midpoint before declaring no-route.
-  // Do not reopen all four sides here: that multiplied dense Tree 2 searches
-  // and could freeze a drag preview.
+  // Keep each planned side choice, but retry its midpoint if the distributed
+  // port is blocked. This preserves fan-out geometry while avoiding an
+  // unconstrained second search during dense drag previews.
   const midpointResult = !primaryResult.found
     ? findProgressivePrototypeRoute(nodeToPrototype(source, sourceBox), nodeToPrototype(target, targetBox), obstacles, {
       maxBends: 2,
-      sourcePorts: [midpointPort(source, sourceBox, sourcePort.direction)],
-      targetPorts: [midpointPort(target, targetBox, targetPort.direction)],
+      sourcePorts: sourcePorts.map((port) => midpointPort(source, sourceBox, port.direction)),
+      targetPorts: targetPorts.map((port) => midpointPort(target, targetBox, port.direction)),
     })
     : null;
   const result = primaryResult.found ? primaryResult : midpointResult;
@@ -274,8 +334,8 @@ export function getOrthogonalRoute(
 
   const repaired = findProgressivePrototypeRoute(nodeToPrototype(source, sourceBox), nodeToPrototype(target, targetBox), obstacles, {
     maxBends: 2,
-    sourcePorts: [sourcePort],
-    targetPorts: [targetPort],
+    sourcePorts,
+    targetPorts,
     arrowObstacles: arrowObstacles as PrototypeSegment[],
     lanePadding: LANE_GAP / 2,
   });
@@ -362,7 +422,8 @@ export function buildDerivedRoutes(tree: TreeMap, override?: { nodeId: string; x
   const displayNodes = nodes.map(positionOf);
   const boxes = new Map(displayNodes.map((node) => [node.id, getNodeBox(node, node.id === rootId)]));
   const orderedEdges = [...edges].sort((a, b) => `${a.source.id}->${a.target.id}`.localeCompare(`${b.source.id}->${b.target.id}`));
-  const portPlans = buildEdgePortPlans(orderedEdges.map(({ source, target }) => ({ source: positionOf(source), target: positionOf(target) })), boxes);
+  const positionedEdges = orderedEdges.map(({ source, target }) => ({ source: positionOf(source), target: positionOf(target) }));
+  const portPlans = buildEdgePortPlans(positionedEdges, boxes, buildFanoutPlacements(positionedEdges));
   const reservedRoutes: Array<{ key: string; segments: Segment[] }> = [];
   return orderedEdges.map(({ source, target }) => {
     const sourceNode = positionOf(source);
