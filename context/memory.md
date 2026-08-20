@@ -2,6 +2,16 @@
 
 ## Current milestone
 
+## Exact faster-router implementation — active 2026-08-20
+
+The routing foundation is now extracted into `client/src/lib/routingEngine.ts` in the live WebDev project. The former candidate-only search and all duplicate canvas routing code have been removed. The active router uses deterministic sparse orthogonal graph search with lazy exact discovery of relevant padded node boxes and reserved arrow lanes. It independently verifies each candidate against the full geometry before returning it, and selects **shortest length → fewer obstacles → fewer bends → stable top/left geometry**. It marks a route non-clean when no complete legal path exists. The independent `verifyRoute` checker now enforces non-orthogonality, node collision, exact 12-unit parallel separation, self-overlap, arrowhead clearance, and source/target perpendicular boundary attachment when endpoint context is supplied.
+
+The contract support modules now include an invisible in-memory uniform spatial index (`routingSpatialIndex.ts`), a conservative affected-route finder (`affectedRoutes.ts`), and a slow independent reference solver for tests (`routingReference.ts`). They persist no route geometry and introduce no UI or saved-data change. The current canvas still recomputes all routes, which is a conservative safe superset while incremental wiring remains to be finalized.
+
+Verification currently passes: `pnpm check`, `pnpm build`, and 13 focused Vitest checks covering direct routes, reverse arrows, exact 12-unit lane spacing, endpoint attachment direction, no-solution rejection, close valid nodes, multiple blockers, deletion/reconnection, third-node detours, reference-length comparison, and conservative affected-route selection. The complete routing suite now runs in roughly 0.7 seconds, compared with a prior approximately 5-second Tree 2 attempt. Browser verification on 2026-08-20 loaded the editor without console errors; its local persisted Tree 1 was empty (0 nodes), so it was not reset or altered. A final visual pass strengthened the sparse-state cartographic grid, compact route-glyph label, cobalt status signal, and edge annotations.
+
+The legacy Tree 2 fixture has one intentionally non-clean edge: `t2-root->t2-a5`. Its root already has four conflicting perpendicular departures, and a fifth fully legal exit would require the user-deferred crowded-port/fan-out or junction-rail design. The regression asserts that the router reports this as illegal rather than inventing an unapproved shared attachment lane. The separate original third-node-detour fixture remains clean.
+
 The approved first editor milestone is implemented in the live WebDev project at `/home/ubuntu/roamaps-live` and synchronized into the GitHub source repository at `/home/ubuntu/roamaps`.
 
 The user’s arrow reference is the geometry ground truth: routes must leave and enter nodes perpendicularly, use right-angle segments, stop at the node boundary, and never run along a node side. Crossing routes use an overpass/bridge treatment. The editor now supports independent node creation, two-node arrow creation, node dragging, undo, redo, and reset. Removing the center/root node is allowed; its connected arrows disappear and its former children remain as independent nodes rather than being promoted.

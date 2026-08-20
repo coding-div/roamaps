@@ -70,3 +70,6 @@ The mark is a compact three-node route glyph: two cobalt points offset around a 
 - The local-first model remains the product truth: users can build immediately without login, and changes remain stored in their browser.
 - The Roamaps identity remains a route-glyph-plus-custom-tight wordmark lockup; it must feel like a map instrument label rather than a default text logo.
 - The editor must retain a visible cartographic structure layer—fine coordinate grid, node topology, route lines, or the status rail—even when the map is otherwise sparse.
+- Sparse editor states show a clearly legible survey grid, compact route-glyph lockup, and edge-aligned map annotations rather than collapsing into an unmarked black field.
+- Route Cobalt `#4C7DFF` remains a small but unmistakable at-rest signal in the editor chrome, while graphite and slate continue to dominate the canvas.
+- Editor metadata uses the Space Grotesk and IBM Plex Mono hierarchy: a compact instrument label, map counts, and a directional empty-state annotation only when the canvas has no nodes.
