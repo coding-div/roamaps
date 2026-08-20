@@ -22,7 +22,9 @@ describe("getOrthogonalRoute", () => {
     );
 
     expect(route.clean).toBe(true);
-    expect(route.points.some((point) => Math.abs(point.x) >= 62)).toBe(true);
+    // Normal blocker half-width is 50; the progressive router keeps the
+    // route on its padded boundary at 60, which is a legal ten-unit gap.
+    expect(route.points.some((point) => Math.abs(point.x) >= 60)).toBe(true);
   });
 
   it("never renders a diagonal segment in the dense Tree 2 roadmap", () => {

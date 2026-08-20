@@ -88,6 +88,35 @@ describe("progressiveRouter — staged router", () => {
     expect(result.targetDirection).toBe("left");
   });
 
+  it("keeps an explicit port route outside the connected node bodies after leaving its source", () => {
+    const source = node("source", 0, 0, 100, 36);
+    const target = node("target", -40, -220, 100, 36);
+    const result = findProgressivePrototypeRoute(source, target, [], {
+      sourcePorts: [{ direction: "left", point: { x: -50, y: 0 } }],
+      targetPorts: [{ direction: "down", point: { x: -40, y: -202 } }],
+      maxBends: 5,
+    });
+
+    expect(result.found).toBe(true);
+    expect(isOrthogonalPrototypeRoute(result)).toBe(true);
+    if (!result.found) return;
+    const sourceInterior = (point: { x: number; y: number }) => point.x > source.box.x && point.x < source.box.x + source.box.w && point.y > source.box.y && point.y < source.box.y + source.box.h;
+    const targetInterior = (point: { x: number; y: number }) => point.x > target.box.x && point.x < target.box.x + target.box.w && point.y > target.box.y && point.y < target.box.y + target.box.h;
+    expect(result.points.slice(1, -1).some((point) => sourceInterior(point) || targetInterior(point))).toBe(false);
+  });
+
+  it("rejects a parallel reserved arrow lane when a two-bend repair cannot reach the fixed ports", () => {
+    const result = findProgressivePrototypeRoute(node("a", 100, 300), node("b", 700, 300), [], {
+      sourceDirections: ["right"],
+      targetDirections: ["left"],
+      arrowObstacles: [{ a: { x: 200, y: 304 }, b: { x: 600, y: 304 } }],
+      lanePadding: 6,
+      maxBends: 2,
+      bounds,
+    });
+    expect(result).toMatchObject({ found: false, reason: "no-legal-route", points: [] });
+  });
+
   it("reports no legal route instead of returning a diagonal fallback", () => {
     const result = findProgressivePrototypeRoute(node("a", 120, 300), node("b", 780, 300), [
       { x: 210, y: 0, w: 560, h: 600 },

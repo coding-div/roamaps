@@ -23,7 +23,7 @@ import {
   type Point,
 } from "@/lib/collision";
 import { useRoadmaps } from "@/contexts/RoadmapContext";
-import { findProgressivePrototypeRoute, type PrototypeNode } from "@/lib/progressiveRouter";
+import { findProgressivePrototypeRoute, type PrototypeNode, type PrototypePort, type PrototypeSegment } from "@/lib/progressiveRouter";
 import { toast } from "sonner";
 import { Home, Link2, Minus, MousePointer2, Plus, Redo2, RotateCcw, Undo2 } from "lucide-react";
 import ActionPanel from "./ActionPanel";
@@ -48,7 +48,7 @@ interface Segment { a: Point; b: Point }
 interface Route { points: Point[]; path: string; targetDirection: Direction; midpoint: Point; clean: boolean }
 interface DragState { nodeId: string; pointerId: number; startX: number; startY: number; moved: boolean; x: number; y: number; baselineRoutes: Map<string, Route> }
 interface ArrowPressState { pointerId: number; startX: number; startY: number }
-interface DragPreview { nodeId: string; x: number; y: number; valid: boolean }
+interface DragPreview { nodeId: string; x: number; y: number; valid: boolean; invalidReason: "node-overlap" | "route-lane" | null }
 interface PlacementPreview { x: number; y: number; valid: boolean }
 type PanelTarget = { type: "node"; nodeId: string } | { type: "arrow"; sourceId: string; targetId: string };
 
@@ -85,6 +85,68 @@ function getPort(node: NodeData, box: Box, direction: Direction): Point {
   if (direction === "down") return { x: node.x, y: node.y + box.h / 2 };
   if (direction === "left") return { x: node.x - box.w / 2, y: node.y };
   return { x: node.x + box.w / 2, y: node.y };
+}
+
+function directionTowards(from: NodeData, to: NodeData): Direction {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? "right" : "left";
+  return dy >= 0 ? "down" : "up";
+}
+
+function oppositeDirection(direction: Direction): Direction {
+  if (direction === "up") return "down";
+  if (direction === "down") return "up";
+  if (direction === "left") return "right";
+  return "left";
+}
+
+function evenlySpacedPort(node: NodeData, box: Box, direction: Direction, index: number, total: number): PrototypePort {
+  const ratio = (index + 1) / (total + 1);
+  if (direction === "up") return { direction, point: { x: box.x + box.w * ratio, y: box.y } };
+  if (direction === "down") return { direction, point: { x: box.x + box.w * ratio, y: box.y + box.h } };
+  if (direction === "left") return { direction, point: { x: box.x, y: box.y + box.h * ratio } };
+  return { direction, point: { x: box.x + box.w, y: box.y + box.h * ratio } };
+}
+
+function midpointPort(node: NodeData, box: Box, direction: Direction): PrototypePort {
+  return { direction, point: getPort(node, box, direction) };
+}
+
+interface EdgePortPlan { sourcePort: PrototypePort; targetPort: PrototypePort }
+interface PlannedEndpoint { key: string; role: "source" | "target"; node: NodeData; direction: Direction }
+
+function buildEdgePortPlans(
+  edges: Array<{ source: NodeData; target: NodeData }>,
+  boxes: Map<string, Box>,
+): Map<string, EdgePortPlan> {
+  const endpoints: PlannedEndpoint[] = edges.flatMap(({ source, target }) => {
+    const sourceDirection = directionTowards(source, target);
+    const targetDirection = oppositeDirection(sourceDirection);
+    return [
+      { key: routeKey(source.id, target.id), role: "source" as const, node: source, direction: sourceDirection },
+      { key: routeKey(source.id, target.id), role: "target" as const, node: target, direction: targetDirection },
+    ];
+  });
+  const grouped = new Map<string, PlannedEndpoint[]>();
+  for (const endpoint of endpoints) {
+    const groupKey = `${endpoint.node.id}:${endpoint.direction}`;
+    const group = grouped.get(groupKey) ?? [];
+    group.push(endpoint);
+    grouped.set(groupKey, group);
+  }
+  const plans = new Map<string, EdgePortPlan>();
+  for (const group of Array.from(grouped.values()) as PlannedEndpoint[][]) {
+    group.sort((a: PlannedEndpoint, b: PlannedEndpoint) => a.key.localeCompare(b.key) || a.role.localeCompare(b.role));
+    group.forEach((endpoint: PlannedEndpoint, index: number) => {
+      const box = boxes.get(endpoint.node.id)!;
+      const port = evenlySpacedPort(endpoint.node, box, endpoint.direction, index, group.length);
+      const plan = plans.get(endpoint.key) ?? ({} as EdgePortPlan);
+      plan[endpoint.role === "source" ? "sourcePort" : "targetPort"] = port;
+      plans.set(endpoint.key, plan);
+    });
+  }
+  return plans;
 }
 
 function isHorizontal(segment: Segment): boolean { return segment.a.y === segment.b.y; }
@@ -180,17 +242,45 @@ function noRoute(): Route {
   return { points: [], path: "", targetDirection: "left", midpoint: { x: 0, y: 0 }, clean: false };
 }
 
-export function getOrthogonalRoute(source: NodeData, target: NodeData, sourceBox: Box, targetBox: Box, obstacles: Box[], arrowObstacles: Segment[] = []): Route {
-  const result = findProgressivePrototypeRoute(
-    nodeToPrototype(source, sourceBox),
-    nodeToPrototype(target, targetBox),
-    obstacles,
-    { maxBends: 5 },
-  );
-  if (!result.found || !result.targetDirection) return noRoute();
+export function getOrthogonalRoute(
+  source: NodeData,
+  target: NodeData,
+  sourceBox: Box,
+  targetBox: Box,
+  obstacles: Box[],
+  arrowObstacles: Segment[] = [],
+  portPlan?: EdgePortPlan,
+): Route {
+  const sourcePort = portPlan?.sourcePort ?? { direction: directionTowards(source, target), point: getPort(source, sourceBox, directionTowards(source, target)) };
+  const targetPort = portPlan?.targetPort ?? { direction: oppositeDirection(directionTowards(source, target)), point: getPort(target, targetBox, oppositeDirection(directionTowards(source, target))) };
+  const routerOptions = { maxBends: 5, sourcePorts: [sourcePort], targetPorts: [targetPort] };
+  const primaryResult = findProgressivePrototypeRoute(nodeToPrototype(source, sourceBox), nodeToPrototype(target, targetBox), obstacles, routerOptions);
+  // A planned edge keeps its chosen sides. If its evenly spaced positions are
+  // blocked, try those same sides at their midpoint before declaring no-route.
+  // Do not reopen all four sides here: that multiplied dense Tree 2 searches
+  // and could freeze a drag preview.
+  const midpointResult = !primaryResult.found
+    ? findProgressivePrototypeRoute(nodeToPrototype(source, sourceBox), nodeToPrototype(target, targetBox), obstacles, {
+      maxBends: 2,
+      sourcePorts: [midpointPort(source, sourceBox, sourcePort.direction)],
+      targetPorts: [midpointPort(target, targetBox, targetPort.direction)],
+    })
+    : null;
+  const result = primaryResult.found ? primaryResult : midpointResult;
+  if (!result || !result.found || !result.targetDirection) return noRoute();
 
-  const clean = !routeHasSelfConflict(result.points) && !routeHasArrowConflict(result.points, arrowObstacles);
-  return routeFromPoints(result.points, result.targetDirection, clean);
+  const baseRoute = routeFromPoints(result.points, result.targetDirection, !routeHasSelfConflict(result.points) && !routeHasArrowConflict(result.points, arrowObstacles));
+  if (baseRoute.clean || arrowObstacles.length === 0) return baseRoute;
+
+  const repaired = findProgressivePrototypeRoute(nodeToPrototype(source, sourceBox), nodeToPrototype(target, targetBox), obstacles, {
+    maxBends: 2,
+    sourcePorts: [sourcePort],
+    targetPorts: [targetPort],
+    arrowObstacles: arrowObstacles as PrototypeSegment[],
+    lanePadding: LANE_GAP / 2,
+  });
+  if (!repaired.found || !repaired.targetDirection) return baseRoute;
+  return routeFromPoints(repaired.points, repaired.targetDirection, !routeHasSelfConflict(repaired.points));
 }
 
 function toSegments(points: Point[]): Segment[] {
@@ -272,6 +362,7 @@ export function buildDerivedRoutes(tree: TreeMap, override?: { nodeId: string; x
   const displayNodes = nodes.map(positionOf);
   const boxes = new Map(displayNodes.map((node) => [node.id, getNodeBox(node, node.id === rootId)]));
   const orderedEdges = [...edges].sort((a, b) => `${a.source.id}->${a.target.id}`.localeCompare(`${b.source.id}->${b.target.id}`));
+  const portPlans = buildEdgePortPlans(orderedEdges.map(({ source, target }) => ({ source: positionOf(source), target: positionOf(target) })), boxes);
   const reservedRoutes: Array<{ key: string; segments: Segment[] }> = [];
   return orderedEdges.map(({ source, target }) => {
     const sourceNode = positionOf(source);
@@ -281,7 +372,7 @@ export function buildDerivedRoutes(tree: TreeMap, override?: { nodeId: string; x
     const obstacleBoxes = displayNodes.filter((node) => node.id !== source.id && node.id !== target.id).map((node) => boxes.get(node.id)!);
     const reverseKey = `${target.id}->${source.id}`;
     const arrowObstacles = reservedRoutes.filter((entry) => entry.key !== reverseKey).flatMap((entry) => entry.segments);
-    const baseRoute = getOrthogonalRoute(sourceNode, targetNode, sourceBox, targetBox, obstacleBoxes, arrowObstacles);
+    const baseRoute = getOrthogonalRoute(sourceNode, targetNode, sourceBox, targetBox, obstacleBoxes, arrowObstacles, portPlans.get(routeKey(source.id, target.id)));
     const laneRoute = baseRoute.points.length < 2
       ? baseRoute
       : applyReverseLane(baseRoute, sourceNode, targetNode, sourceBox, targetBox, getReverseLane(source, target, orderedEdges));
@@ -502,8 +593,15 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
         if (!node) return;
         const candidate = { ...node, x: drag.x + point.x - startPoint.x, y: drag.y + point.y - startPoint.y };
         const routesForCandidate = buildDerivedRoutes(tree, { nodeId: drag.nodeId, x: candidate.x, y: candidate.y });
-        const valid = canPlaceNode(candidate, Object.values(tree.nodeMap), tree.root?.id ?? null, drag.nodeId) && !introducesNewRouteProblems(drag.baselineRoutes, routesForCandidate);
-        setDragPosition({ nodeId: drag.nodeId, x: candidate.x, y: candidate.y, valid });
+        const nodeFits = canPlaceNode(candidate, Object.values(tree.nodeMap), tree.root?.id ?? null, drag.nodeId);
+        const routeProblem = nodeFits && introducesNewRouteProblems(drag.baselineRoutes, routesForCandidate);
+        setDragPosition({
+          nodeId: drag.nodeId,
+          x: candidate.x,
+          y: candidate.y,
+          valid: nodeFits && !routeProblem,
+          invalidReason: !nodeFits ? "node-overlap" : routeProblem ? "route-lane" : null,
+        });
       }
     }
   }
@@ -516,6 +614,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     endLongPress();
     if (drag.moved && point) {
       if (point.valid) dispatch({ type: "MOVE_NODE", treeId: tree.id, nodeId: drag.nodeId, x: point.x, y: point.y });
+      else if (point.invalidReason === "route-lane") toast.message("No free arrow lane in five bends", { description: "The node returned to its previous position." });
       else toast.message("Space occupied", { description: "The object returned to its previous position." });
     }
     if (shortTap) {
@@ -691,13 +790,14 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       const isRoot = node.id === rootId;
       const selected = connectSourceId === node.id;
       const invalidDrag = dragPosition?.nodeId === node.id && !dragPosition.valid;
+      const routeLaneDrag = dragPosition?.nodeId === node.id && dragPosition.invalidReason === "route-lane";
       const size = getBoxDimensions(node.label, isRoot);
       const envelope = getNodeEnvelope(node, isRoot);
       const heading = truncateHeading(node.label, size.w, isRoot);
       return (
         <g key={`${tree.id}-${node.id}`} data-node-id={node.id} className="tree-node-group" style={{ cursor: connectMode ? "crosshair" : dragPosition?.nodeId === node.id ? "grabbing" : "grab" }} onPointerDown={(e) => beginNodePointer(e, node)} onPointerMove={moveNodePointer} onPointerUp={finishNodePointer} onPointerCancel={finishNodePointer}>
           <rect x={envelope.x} y={envelope.y} width={envelope.w} height={envelope.h} rx={NODE_RADIUS + 8} fill="transparent" pointerEvents="all" />
-          <rect x={node.x - size.w / 2} y={node.y - size.h / 2} width={size.w} height={size.h} rx={NODE_RADIUS} fill="#13131a" stroke={invalidDrag ? "#ef4444" : selected ? "#f2f4fa" : VIBGYOR_COLORS[node.color]} strokeWidth={invalidDrag || selected ? 3 : isRoot ? 2 : 1.5} strokeOpacity={invalidDrag || selected ? 1 : 0.82} />
+          <rect x={node.x - size.w / 2} y={node.y - size.h / 2} width={size.w} height={size.h} rx={NODE_RADIUS} fill="#13131a" stroke={invalidDrag ? routeLaneDrag ? "#f59e0b" : "#ef4444" : selected ? "#f2f4fa" : VIBGYOR_COLORS[node.color]} strokeWidth={invalidDrag || selected ? 3 : isRoot ? 2 : 1.5} strokeOpacity={invalidDrag || selected ? 1 : 0.82} />
           {heading && <text x={node.x} y={node.y} textAnchor="middle" dominantBaseline="central" fill="#e4e4e7" fontSize={isRoot ? ROOT_FONT_SIZE : FONT_SIZE} fontWeight={isRoot ? 600 : 500} fontFamily="'Space Grotesk', sans-serif" pointerEvents="none">{heading}</text>}
         </g>
       );

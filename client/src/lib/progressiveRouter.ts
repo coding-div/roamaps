@@ -33,10 +33,26 @@ export interface PrototypeRoute {
   reason?: "no-legal-route" | "maximum-bends-exhausted";
 }
 
+export interface PrototypePort {
+  direction: Direction;
+  point: Point;
+}
+
+export interface PrototypeSegment {
+  a: Point;
+  b: Point;
+}
+
 export interface PrototypeOptions {
   /** Search all node sides by default; fixtures may constrain sides deliberately. */
   sourceDirections?: Direction[];
   targetDirections?: Direction[];
+  /** Optional preassigned side ports, used by the live canvas to distribute fan-out evenly. */
+  sourcePorts?: PrototypePort[];
+  targetPorts?: PrototypePort[];
+  /** Optional reserved arrow lanes for a bounded clean-route repair search. */
+  arrowObstacles?: PrototypeSegment[];
+  lanePadding?: number;
   /** Test-only finite area used to create genuine multi-bend obstacle mazes. */
   bounds?: Box;
   maxBends?: number;
@@ -54,6 +70,50 @@ interface SearchState {
   bends: number;
   length: number;
   points: number[];
+}
+
+/**
+ * The staged router may visit thousands of visibility-graph states in a dense
+ * canvas. A binary heap preserves `compareState` ordering without re-sorting
+ * the entire pending queue at every visit, keeping live drag work bounded.
+ */
+class SearchStateHeap {
+  private items: SearchState[] = [];
+
+  get size(): number {
+    return this.items.length;
+  }
+
+  push(item: SearchState): void {
+    this.items.push(item);
+    let index = this.items.length - 1;
+    while (index > 0) {
+      const parent = Math.floor((index - 1) / 2);
+      if (compareState(this.items[parent], item) <= 0) break;
+      this.items[index] = this.items[parent];
+      index = parent;
+    }
+    this.items[index] = item;
+  }
+
+  pop(): SearchState | undefined {
+    const first = this.items[0];
+    const last = this.items.pop();
+    if (!first || !last || this.items.length === 0) return first;
+
+    let index = 0;
+    while (true) {
+      const left = index * 2 + 1;
+      const right = left + 1;
+      if (left >= this.items.length) break;
+      const child = right < this.items.length && compareState(this.items[right], this.items[left]) < 0 ? right : left;
+      if (compareState(this.items[child], last) >= 0) break;
+      this.items[index] = this.items[child];
+      index = child;
+    }
+    this.items[index] = last;
+    return first;
+  }
 }
 
 function pointKey(point: Point): string {
@@ -83,6 +143,11 @@ function getPort(node: PrototypeNode, direction: Direction): Point {
   if (direction === "down") return { x: node.x, y: node.box.y + node.box.h };
   if (direction === "left") return { x: node.box.x, y: node.y };
   return { x: node.box.x + node.box.w, y: node.y };
+}
+
+function resolvePorts(node: PrototypeNode, directions: Direction[], supplied?: PrototypePort[]): PrototypePort[] {
+  if (supplied?.length) return supplied.filter((port) => directions.includes(port.direction));
+  return directions.map((direction) => ({ direction, point: getPort(node, direction) }));
 }
 
 function directionFrom(a: Point, b: Point): Direction {
@@ -127,6 +192,66 @@ function isRouteClear(points: Point[], obstacles: Box[], bounds?: Box): boolean 
   return points.slice(1).every((point, index) => segmentClear(points[index], point, obstacles, bounds));
 }
 
+function segmentTouchesBox(a: Point, b: Point, box: Box): boolean {
+  const right = box.x + box.w;
+  const bottom = box.y + box.h;
+  if (a.x === b.x) {
+    const low = Math.min(a.y, b.y);
+    const high = Math.max(a.y, b.y);
+    return a.x >= box.x && a.x <= right && high >= box.y && low <= bottom;
+  }
+  if (a.y === b.y) {
+    const low = Math.min(a.x, b.x);
+    const high = Math.max(a.x, b.x);
+    return a.y >= box.y && a.y <= bottom && high >= box.x && low <= right;
+  }
+  return true;
+}
+
+function pointMatchesPort(point: Point, port: PrototypePort): boolean {
+  return point.x === port.point.x && point.y === port.point.y;
+}
+
+/** Endpoint boxes are excluded from route obstacles, so audit them after route construction. */
+function respectsEndpointBodies(
+  points: Point[],
+  source: PrototypeNode,
+  target: PrototypeNode,
+  sourcePort: PrototypePort,
+  targetPort: PrototypePort,
+): boolean {
+  if (points.length < 2 || !pointMatchesPort(points[0], sourcePort) || !pointMatchesPort(points[points.length - 1], targetPort)) return false;
+  if (directionFrom(points[0], points[1]) !== sourcePort.direction) return false;
+  if (directionFrom(points[points.length - 2], points[points.length - 1]) !== opposite(targetPort.direction)) return false;
+
+  const finalSegmentIndex = points.length - 2;
+  return points.slice(1).every((point, index) => {
+    const a = points[index];
+    const segmentIndex = index;
+    return (
+      (segmentIndex === 0 || !segmentTouchesBox(a, point, source.box)) &&
+      (segmentIndex === finalSegmentIndex || !segmentTouchesBox(a, point, target.box))
+    );
+  });
+}
+
+function parallelSegmentConflict(a: Point, b: Point, c: Point, d: Point, padding: number): boolean {
+  const aVertical = a.x === b.x;
+  const cVertical = c.x === d.x;
+  if (aVertical !== cVertical) return false;
+  if (aVertical) {
+    if (Math.abs(a.x - c.x) > padding) return false;
+    return Math.max(Math.min(a.y, b.y), Math.min(c.y, d.y)) < Math.min(Math.max(a.y, b.y), Math.max(c.y, d.y));
+  }
+  if (Math.abs(a.y - c.y) > padding) return false;
+  return Math.max(Math.min(a.x, b.x), Math.min(c.x, d.x)) < Math.min(Math.max(a.x, b.x), Math.max(c.x, d.x));
+}
+
+function avoidsArrowLanes(points: Point[], obstacles: PrototypeSegment[] | undefined, padding: number): boolean {
+  if (!obstacles?.length) return true;
+  return points.slice(1).every((point, index) => !obstacles.some((obstacle) => parallelSegmentConflict(points[index], point, obstacle.a, obstacle.b, padding)));
+}
+
 function compareRoutes(a: PrototypeRoute, b: PrototypeRoute): number {
   return (
     a.bends - b.bends ||
@@ -147,13 +272,15 @@ function findSimpleForPorts(
   source: PrototypeNode,
   target: PrototypeNode,
   obstacles: Box[],
-  sourceDirection: Direction,
-  targetDirection: Direction,
-  bounds?: Box,
+  sourcePort: PrototypePort,
+  targetPort: PrototypePort,
+  options: PrototypeOptions,
 ): PrototypeRoute | null {
-  const start = getPort(source, sourceDirection);
+  const { direction: sourceDirection } = sourcePort;
+  const { direction: targetDirection } = targetPort;
+  const start = sourcePort.point;
   const startOut = move(start, sourceDirection, PROTOTYPE_CLEARANCE);
-  const end = getPort(target, targetDirection);
+  const end = targetPort.point;
   const endIn = move(end, targetDirection, PROTOTYPE_CLEARANCE);
   const sourceLeavesHorizontally = sourceDirection === "left" || sourceDirection === "right";
   const corner = sourceLeavesHorizontally
@@ -161,7 +288,12 @@ function findSimpleForPorts(
     : { x: startOut.x, y: endIn.y };
   const points = simplify([start, startOut, corner, endIn, end]);
 
-  if (points.length < 2 || !isRouteClear(points, obstacles, bounds)) return null;
+  if (
+    points.length < 2 ||
+    !isRouteClear(points, obstacles, options.bounds) ||
+    !respectsEndpointBodies(points, source, target, sourcePort, targetPort) ||
+    !avoidsArrowLanes(points, options.arrowObstacles, options.lanePadding ?? 6)
+  ) return null;
   const bends = bendCount(points);
   if (bends > 1 || distance(points[points.length - 2], end) < PROTOTYPE_MIN_FINAL_SEGMENT) return null;
 
@@ -173,6 +305,67 @@ function findSimpleForPorts(
     sourceDirection,
     targetDirection,
   };
+}
+
+/**
+ * For fixed ports with matching horizontal or vertical approach directions,
+ * a two-bend route differs only by its middle lane. Trying padded obstacle
+ * boundaries directly returns the same legal candidates as the visibility
+ * graph without constructing that graph for routine dense-editor detours.
+ */
+function findTwoBendForPorts(
+  source: PrototypeNode,
+  target: PrototypeNode,
+  obstacles: Box[],
+  sourcePort: PrototypePort,
+  targetPort: PrototypePort,
+  options: PrototypeOptions,
+): PrototypeRoute | null {
+  const start = sourcePort.point;
+  const startOut = move(start, sourcePort.direction, PROTOTYPE_CLEARANCE);
+  const end = targetPort.point;
+  const endIn = move(end, targetPort.direction, PROTOTYPE_CLEARANCE);
+  const finalDirection = opposite(targetPort.direction);
+  const sourceHorizontal = sourcePort.direction === "left" || sourcePort.direction === "right";
+  const finalHorizontal = finalDirection === "left" || finalDirection === "right";
+  if (sourceHorizontal !== finalHorizontal) return null;
+
+  const lanes = (sourceHorizontal
+    ? [startOut.x, endIn.x, ...obstacles.flatMap((box) => [box.x - PROTOTYPE_OBSTACLE_PADDING, box.x + box.w + PROTOTYPE_OBSTACLE_PADDING])]
+    : [startOut.y, endIn.y, ...obstacles.flatMap((box) => [box.y - PROTOTYPE_OBSTACLE_PADDING, box.y + box.h + PROTOTYPE_OBSTACLE_PADDING])]
+  ).filter((lane, index, values) => values.indexOf(lane) === index).sort((a, b) => a - b);
+  const candidates: PrototypeRoute[] = [];
+
+  for (const lane of lanes) {
+    const leavesCorrectly = sourceHorizontal
+      ? (sourcePort.direction === "right" ? lane >= startOut.x : lane <= startOut.x)
+      : (sourcePort.direction === "down" ? lane >= startOut.y : lane <= startOut.y);
+    const arrivesCorrectly = sourceHorizontal
+      ? (finalDirection === "right" ? lane <= endIn.x : lane >= endIn.x)
+      : (finalDirection === "down" ? lane <= endIn.y : lane >= endIn.y);
+    if (!leavesCorrectly || !arrivesCorrectly) continue;
+
+    const points = sourceHorizontal
+      ? simplify([start, startOut, { x: lane, y: startOut.y }, { x: lane, y: endIn.y }, endIn, end])
+      : simplify([start, startOut, { x: startOut.x, y: lane }, { x: endIn.x, y: lane }, endIn, end]);
+    if (
+      bendCount(points) !== 2 ||
+      !isRouteClear(points, obstacles, options.bounds) ||
+      !respectsEndpointBodies(points, source, target, sourcePort, targetPort) ||
+      !avoidsArrowLanes(points, options.arrowObstacles, options.lanePadding ?? 6)
+    ) continue;
+    candidates.push({
+      found: true,
+      points,
+      bends: 2,
+      length: routeLength(points),
+      sourceDirection: sourcePort.direction,
+      targetDirection: targetPort.direction,
+    });
+  }
+
+  candidates.sort(compareRoutes);
+  return candidates[0] ?? null;
 }
 
 function isInsideExpanded(point: Point, obstacle: Box): boolean {
@@ -305,13 +498,16 @@ function findForPorts(
   source: PrototypeNode,
   target: PrototypeNode,
   obstacles: Box[],
-  sourceDirection: Direction,
-  targetDirection: Direction,
+  sourcePort: PrototypePort,
+  targetPort: PrototypePort,
   options: Required<Pick<PrototypeOptions, "maxBends">> & Pick<PrototypeOptions, "bounds">,
+  routeOptions: PrototypeOptions,
 ): PrototypeRoute | null {
-  const start = getPort(source, sourceDirection);
+  const { direction: sourceDirection } = sourcePort;
+  const { direction: targetDirection } = targetPort;
+  const start = sourcePort.point;
   const startOut = move(start, sourceDirection, PROTOTYPE_CLEARANCE);
-  const end = getPort(target, targetDirection);
+  const end = targetPort.point;
   const endIn = move(end, targetDirection, PROTOTYPE_CLEARANCE);
   const finalDirection = opposite(targetDirection);
 
@@ -322,13 +518,13 @@ function findForPorts(
   const endIndex = indexByKey.get(pointKey(endIn));
   if (startIndex === undefined || endIndex === undefined) return null;
 
-  const queue: SearchState[] = [{ vertex: startIndex, direction: sourceDirection, bends: 0, length: distance(start, startOut), points: [startIndex] }];
+  const queue = new SearchStateHeap();
+  queue.push({ vertex: startIndex, direction: sourceDirection, bends: 0, length: distance(start, startOut), points: [startIndex] });
   const best = new Map<string, number>();
   let winner: PrototypeRoute | null = null;
 
-  while (queue.length > 0) {
-    queue.sort(compareState);
-    const current = queue.shift()!;
+  while (queue.size > 0) {
+    const current = queue.pop()!;
     const stateKey = `${current.vertex}:${current.direction}:${current.bends}`;
     if ((best.get(stateKey) ?? Number.POSITIVE_INFINITY) < current.length) continue;
 
@@ -347,6 +543,8 @@ function findForPorts(
         };
         if (
           route.bends <= options.maxBends &&
+          respectsEndpointBodies(route.points, source, target, sourcePort, targetPort) &&
+          avoidsArrowLanes(route.points, routeOptions.arrowObstacles, routeOptions.lanePadding ?? 6) &&
           (!winner || route.bends < winner.bends || (route.bends === winner.bends && (route.length < winner.length || (route.length === winner.length && pathSignature(route.points) < pathSignature(winner.points)))))
         ) {
           winner = route;
@@ -383,11 +581,13 @@ export function findProgressivePrototypeRoute(
   const maxBends = options.maxBends ?? 5;
   const sourceDirections = options.sourceDirections ?? DIRECTION_ORDER;
   const targetDirections = options.targetDirections ?? DIRECTION_ORDER;
+  const sourcePorts = resolvePorts(source, sourceDirections, options.sourcePorts);
+  const targetPorts = resolvePorts(target, targetDirections, options.targetPorts);
   const simpleCandidates: PrototypeRoute[] = [];
 
-  for (const sourceDirection of sourceDirections) {
-    for (const targetDirection of targetDirections) {
-      const candidate = findSimpleForPorts(source, target, obstacles, sourceDirection, targetDirection, options.bounds);
+  for (const sourcePort of sourcePorts) {
+    for (const targetPort of targetPorts) {
+      const candidate = findSimpleForPorts(source, target, obstacles, sourcePort, targetPort, options);
       if (candidate) simpleCandidates.push(candidate);
     }
   }
@@ -397,17 +597,31 @@ export function findProgressivePrototypeRoute(
     if (candidates[0]) return candidates[0];
   }
 
-  for (let bendLimit = 2; bendLimit <= maxBends; bendLimit++) {
-    const candidates: PrototypeRoute[] = [];
-    for (const sourceDirection of sourceDirections) {
-      for (const targetDirection of targetDirections) {
-        const candidate = findForPorts(source, target, obstacles, sourceDirection, targetDirection, { maxBends: bendLimit, bounds: options.bounds });
-        if (candidate?.bends === bendLimit) candidates.push(candidate);
+  if (maxBends >= 2) {
+    const twoBendCandidates: PrototypeRoute[] = [];
+    for (const sourcePort of sourcePorts) {
+      for (const targetPort of targetPorts) {
+        const candidate = findTwoBendForPorts(source, target, obstacles, sourcePort, targetPort, options);
+        if (candidate) twoBendCandidates.push(candidate);
       }
     }
-    candidates.sort(compareRoutes);
-    if (candidates[0]) return candidates[0];
+    twoBendCandidates.sort(compareRoutes);
+    if (twoBendCandidates[0]) return twoBendCandidates[0];
   }
+
+  // `findForPorts` already ranks every reachable candidate by bend count, then
+  // length. Running it once at the maximum allowed bend count preserves the
+  // staged 2–5-bend result while avoiding four identical visibility-graph
+  // constructions for every explicit port pair during a drag preview.
+  const multiBendCandidates: PrototypeRoute[] = [];
+  for (const sourcePort of sourcePorts) {
+    for (const targetPort of targetPorts) {
+      const candidate = findForPorts(source, target, obstacles, sourcePort, targetPort, { maxBends, bounds: options.bounds }, options);
+      if (candidate && candidate.bends >= 2) multiBendCandidates.push(candidate);
+    }
+  }
+  multiBendCandidates.sort(compareRoutes);
+  if (multiBendCandidates[0]) return multiBendCandidates[0];
 
   return {
     found: false,
