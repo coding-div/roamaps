@@ -5,7 +5,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  getAllEdges as getEdgesFromTree,
   getAllNodes as getNodesFromTree,
+  type Direction,
   type NodeData,
   type TreeMap,
   VIBGYOR_COLORS,
@@ -25,7 +27,6 @@ import { toast } from "sonner";
 import { Home, Link2, Minus, MousePointer2, Plus, Redo2, RotateCcw, Undo2 } from "lucide-react";
 import ActionPanel from "./ActionPanel";
 import NodePopup from "./NodePopup";
-import { buildDerivedRoutes, toSegments, type DerivedRoute, type Route, type Segment } from "@/lib/routingEngine";
 
 interface TreeCanvasProps {
   tree: TreeMap;
@@ -35,27 +36,39 @@ const GRID_SIZE = 30;
 const FONT_SIZE = 12;
 const LINE_HEIGHT = 18;
 const ROOT_FONT_SIZE = 14;
+const ROUTE_CLEARANCE = 18;
+const OBSTACLE_PADDING = 10;
 const ARROW_LENGTH = 9;
 const ARROW_WIDTH = 5;
+const MIN_ARROW_SEGMENT = ARROW_LENGTH + 6;
 const ARROW_PRESS_MOVE_THRESHOLD = 10;
+const LANE_GAP = 12;
 
 interface ViewBox { x: number; y: number; w: number; h: number }
-interface DragState { nodeId: string; pointerId: number; startX: number; startY: number; moved: boolean; x: number; y: number }
+interface Segment { a: Point; b: Point }
+interface Route { points: Point[]; path: string; targetDirection: Direction; midpoint: Point; clean: boolean }
+interface DragState { nodeId: string; pointerId: number; startX: number; startY: number; moved: boolean; x: number; y: number; baselineRoutes: Map<string, Route> }
 interface ArrowPressState { pointerId: number; startX: number; startY: number }
 interface DragPreview { nodeId: string; x: number; y: number; valid: boolean }
 interface PlacementPreview { x: number; y: number; valid: boolean }
 type PanelTarget = { type: "node"; nodeId: string } | { type: "arrow"; sourceId: string; targetId: string };
 
-function hasIllegalRoute(candidateRoutes: DerivedRoute[]): boolean {
-  return candidateRoutes.some(({ route }) => !route.clean);
+function routeKey(sourceId: string, targetId: string): string {
+  return `${sourceId}->${targetId}`;
+}
+
+function introducesNewRouteProblems(baselineRoutes: Map<string, Route>, candidateRoutes: DerivedRoute[]): boolean {
+  return candidateRoutes.some(({ source, target, route }) => {
+    const previous = baselineRoutes.get(routeKey(source.id, target.id));
+    return Boolean(previous?.clean && !route.clean);
+  });
 }
 
 function DotGrid() {
   return (
     <defs>
       <pattern id="dotGrid" width={GRID_SIZE} height={GRID_SIZE} patternUnits="userSpaceOnUse">
-        <path d={`M ${GRID_SIZE} 0 H 0 V ${GRID_SIZE}`} fill="none" stroke="#1b2231" strokeWidth={0.75} />
-        <circle cx={GRID_SIZE / 2} cy={GRID_SIZE / 2} r={1.1} fill="#35415b" opacity={0.8} />
+        <circle cx={GRID_SIZE / 2} cy={GRID_SIZE / 2} r={1} fill="#2a2a35" />
       </pattern>
     </defs>
   );
@@ -68,11 +81,228 @@ function truncateHeading(label: string, boxWidth: number, isRoot: boolean): stri
   return normalized.length > maxChars ? `${normalized.slice(0, Math.max(1, maxChars - 1))}…` : normalized;
 }
 
+function getPort(node: NodeData, box: Box, direction: Direction): Point {
+  if (direction === "up") return { x: node.x, y: node.y - box.h / 2 };
+  if (direction === "down") return { x: node.x, y: node.y + box.h / 2 };
+  if (direction === "left") return { x: node.x - box.w / 2, y: node.y };
+  return { x: node.x + box.w / 2, y: node.y };
+}
+
+function movePoint(point: Point, direction: Direction, distance: number): Point {
+  if (direction === "up") return { x: point.x, y: point.y - distance };
+  if (direction === "down") return { x: point.x, y: point.y + distance };
+  if (direction === "left") return { x: point.x - distance, y: point.y };
+  return { x: point.x + distance, y: point.y };
+}
+
+function directionFromTo(a: Point, b: Point): Direction {
+  if (Math.abs(b.x - a.x) >= Math.abs(b.y - a.y)) return b.x >= a.x ? "right" : "left";
+  return b.y >= a.y ? "down" : "up";
+}
+
+function isHorizontal(segment: Segment): boolean { return segment.a.y === segment.b.y; }
+
+function overlapLength(a1: number, a2: number, b1: number, b2: number): number {
+  return Math.min(Math.max(a1, a2), Math.max(b1, b2)) - Math.max(Math.min(a1, a2), Math.min(b1, b2));
+}
+
+function parallelSegmentConflict(a: Segment, b: Segment, padding = LANE_GAP / 2): boolean {
+  if (isHorizontal(a) !== isHorizontal(b)) return false;
+  if (isHorizontal(a)) return Math.abs(a.a.y - b.a.y) <= padding && overlapLength(a.a.x, a.b.x, b.a.x, b.b.x) > 0;
+  return Math.abs(a.a.x - b.a.x) <= padding && overlapLength(a.a.y, a.b.y, b.a.y, b.b.y) > 0;
+}
+
+function routeHasSelfConflict(points: Point[]): boolean {
+  const segments = toSegments(points);
+  for (let i = 0; i < segments.length; i++) {
+    for (let j = i + 2; j < segments.length; j++) {
+      if (parallelSegmentConflict(segments[i], segments[j])) return true;
+    }
+  }
+  return false;
+}
+
+function routeHasArrowConflict(points: Point[], arrowObstacles: Segment[]): boolean {
+  return toSegments(points).some((segment) => arrowObstacles.some((obstacle) => parallelSegmentConflict(segment, obstacle)));
+}
+
+function simplifyPoints(points: Point[]): Point[] {
+  const result: Point[] = [];
+  for (const point of points) {
+    const previous = result[result.length - 1];
+    if (previous && previous.x === point.x && previous.y === point.y) continue;
+    const before = result[result.length - 2];
+    if (before && previous && ((before.x === previous.x && previous.x === point.x) || (before.y === previous.y && previous.y === point.y))) {
+      result[result.length - 1] = point;
+    } else result.push(point);
+  }
+  return result;
+}
+
 function pointInsideRect(point: Point, rect: Box, padding = 0): boolean {
   return point.x > rect.x - padding && point.x < rect.x + rect.w + padding && point.y > rect.y - padding && point.y < rect.y + rect.h + padding;
 }
 
-function isHorizontal(segment: Segment): boolean { return segment.a.y === segment.b.y; }
+function segmentClear(a: Point, b: Point, obstacles: Box[], arrowObstacles: Segment[] = []): boolean {
+  if (a.x !== b.x && a.y !== b.y) return false;
+  for (const obstacle of obstacles) {
+    if (a.x === b.x) {
+      const yMin = Math.min(a.y, b.y);
+      const yMax = Math.max(a.y, b.y);
+      if (a.x > obstacle.x - OBSTACLE_PADDING && a.x < obstacle.x + obstacle.w + OBSTACLE_PADDING && yMax > obstacle.y - OBSTACLE_PADDING && yMin < obstacle.y + obstacle.h + OBSTACLE_PADDING) return false;
+    } else {
+      const xMin = Math.min(a.x, b.x);
+      const xMax = Math.max(a.x, b.x);
+      if (a.y > obstacle.y - OBSTACLE_PADDING && a.y < obstacle.y + obstacle.h + OBSTACLE_PADDING && xMax > obstacle.x - OBSTACLE_PADDING && xMin < obstacle.x + obstacle.w + OBSTACLE_PADDING) return false;
+    }
+  }
+  if (arrowObstacles.some((obstacle) => parallelSegmentConflict({ a, b }, obstacle))) return false;
+  return true;
+}
+
+function routeClear(points: Point[], obstacles: Box[], arrowObstacles: Segment[] = []): boolean {
+  for (let i = 0; i < points.length - 1; i++) if (!segmentClear(points[i], points[i + 1], obstacles, arrowObstacles)) return false;
+  return true;
+}
+
+function blockingObstacles(points: Point[], obstacles: Box[]): Box[] {
+  const segments = toSegments(points);
+  return obstacles.filter((obstacle) => segments.some((segment) => !segmentClear(segment.a, segment.b, [obstacle])));
+}
+
+function routeLength(points: Point[]): number {
+  return points.slice(1).reduce((total, point, index) => total + Math.abs(point.x - points[index].x) + Math.abs(point.y - points[index].y), 0);
+}
+
+function routeFromPoints(points: Point[], targetDirection: Direction, clean = true): Route {
+  const simplified = simplifyPoints(points);
+  const path = simplified.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
+  let midpoint = simplified[0];
+  let longest = -1;
+  for (let i = 0; i < simplified.length - 1; i++) {
+    const length = Math.abs(simplified[i + 1].x - simplified[i].x) + Math.abs(simplified[i + 1].y - simplified[i].y);
+    if (length > longest) {
+      longest = length;
+      midpoint = { x: (simplified[i].x + simplified[i + 1].x) / 2, y: (simplified[i].y + simplified[i + 1].y) / 2 };
+    }
+  }
+  return { points: simplified, path, targetDirection, midpoint, clean };
+}
+
+function getReverseLane(source: NodeData, target: NodeData, allEdges: Array<{ source: NodeData; target: NodeData }>): Point {
+  const hasReverse = allEdges.some((edge) => edge.source.id === target.id && edge.target.id === source.id);
+  if (!hasReverse) return { x: 0, y: 0 };
+  const sign = `${source.id}->${target.id}` < `${target.id}->${source.id}` ? 1 : -1;
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  const length = Math.hypot(dx, dy) || 1;
+  return { x: (-dy / length) * LANE_GAP * sign, y: (dx / length) * LANE_GAP * sign };
+}
+
+function applyReverseLane(route: Route, source: NodeData, target: NodeData, sourceBox: Box, targetBox: Box, lane: Point): Route {
+  if (lane.x === 0 && lane.y === 0) return route;
+  const alignedHorizontal = source.y === target.y && route.points.length === 2;
+  const alignedVertical = source.x === target.x && route.points.length === 2;
+  if (alignedHorizontal) {
+    const direction: Direction = lane.y < 0 ? "up" : "down";
+    const start = getPort(source, sourceBox, direction);
+    const end = getPort(target, targetBox, direction);
+    const laneY = source.y + (direction === "up" ? -(Math.max(sourceBox.h, targetBox.h) / 2 + ROUTE_CLEARANCE + LANE_GAP) : Math.max(sourceBox.h, targetBox.h) / 2 + ROUTE_CLEARANCE + LANE_GAP);
+    return routeFromPoints([start, { x: start.x, y: laneY }, { x: end.x, y: laneY }, end], direction, route.clean);
+  }
+  if (alignedVertical) {
+    const direction: Direction = lane.x < 0 ? "left" : "right";
+    const start = getPort(source, sourceBox, direction);
+    const end = getPort(target, targetBox, direction);
+    const laneX = source.x + (direction === "left" ? -(Math.max(sourceBox.w, targetBox.w) / 2 + ROUTE_CLEARANCE + LANE_GAP) : Math.max(sourceBox.w, targetBox.w) / 2 + ROUTE_CLEARANCE + LANE_GAP);
+    return routeFromPoints([start, { x: laneX, y: start.y }, { x: laneX, y: end.y }, end], direction, route.clean);
+  }
+  return route;
+}
+
+export function getOrthogonalRoute(source: NodeData, target: NodeData, sourceBox: Box, targetBox: Box, obstacles: Box[], arrowObstacles: Segment[] = []): Route {
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  if (source.y === target.y && dx !== 0) {
+    const sourceDirection: Direction = dx > 0 ? "right" : "left";
+    const targetDirection: Direction = dx > 0 ? "left" : "right";
+    const start = getPort(source, sourceBox, sourceDirection);
+    const end = getPort(target, targetBox, targetDirection);
+    if (segmentClear(start, end, obstacles, arrowObstacles) && Math.abs(end.x - start.x) + Math.abs(end.y - start.y) >= MIN_ARROW_SEGMENT) return routeFromPoints([start, end], targetDirection);
+  }
+  if (source.x === target.x && dy !== 0) {
+    const sourceDirection: Direction = dy > 0 ? "down" : "up";
+    const targetDirection: Direction = dy > 0 ? "up" : "down";
+    const start = getPort(source, sourceBox, sourceDirection);
+    const end = getPort(target, targetBox, targetDirection);
+    if (segmentClear(start, end, obstacles, arrowObstacles) && Math.abs(end.x - start.x) + Math.abs(end.y - start.y) >= MIN_ARROW_SEGMENT) return routeFromPoints([start, end], targetDirection);
+  }
+  const horizontalFirst: Direction[] = dx >= 0 ? ["right", "left", "down", "up"] : ["left", "right", "up", "down"];
+  const verticalFirst: Direction[] = dy >= 0 ? ["down", "up", "right", "left"] : ["up", "down", "left", "right"];
+  const ordered = Math.abs(dx) >= Math.abs(dy) ? horizontalFirst : verticalFirst;
+  const pairs: Array<[Direction, Direction]> = [];
+  for (const sourceDirection of ordered) for (const targetDirection of ordered) pairs.push([sourceDirection, targetDirection]);
+  const candidates: Array<{ points: Point[]; targetDirection: Direction; cost: number; clean: boolean }> = [];
+  const candidateKeys = new Set<string>();
+
+  function evaluateCandidate(rawPoints: Point[], targetDirection: Direction): void {
+    const points = simplifyPoints(rawPoints);
+    const key = `${targetDirection}:${points.map((point) => `${point.x},${point.y}`).join(";")}`;
+    if (candidateKeys.has(key)) return;
+    candidateKeys.add(key);
+    const clear = routeClear(points, obstacles, arrowObstacles);
+    const selfClear = !routeHasSelfConflict(points);
+    const finalSegment = points[points.length - 1] && points[points.length - 2]
+      ? Math.abs(points[points.length - 1].x - points[points.length - 2].x) + Math.abs(points[points.length - 1].y - points[points.length - 2].y)
+      : 0;
+    const clean = clear && selfClear && finalSegment >= MIN_ARROW_SEGMENT;
+    const obstaclePenalty = clean ? 0 : 100000;
+    candidates.push({ points, targetDirection, cost: routeLength(points) + points.length * 10 + obstaclePenalty, clean });
+  }
+
+  for (const [sourceDirection, targetDirection] of pairs) {
+    const start = getPort(source, sourceBox, sourceDirection);
+    const end = getPort(target, targetBox, targetDirection);
+    const startOut = movePoint(start, sourceDirection, ROUTE_CLEARANCE);
+    const endIn = movePoint(end, targetDirection, ROUTE_CLEARANCE);
+    const connectors: Point[][] = [
+      [start, startOut, { x: endIn.x, y: startOut.y }, endIn, end],
+      [start, startOut, { x: startOut.x, y: endIn.y }, endIn, end],
+    ];
+    for (const rawPoints of connectors) {
+      evaluateCandidate(rawPoints, targetDirection);
+
+      // Obsidian Cartography routing: when a basic one-corner connector meets a
+      // third node, try the four clearance lanes immediately around that node.
+      // These extra two-turn routes are generated only for blockers of this
+      // connector, avoiding a whole-canvas search on every drag frame.
+      for (const obstacle of blockingObstacles(simplifyPoints(rawPoints), obstacles)) {
+        const laneXs = [
+          obstacle.x - OBSTACLE_PADDING - 2,
+          obstacle.x + obstacle.w + OBSTACLE_PADDING + 2,
+        ];
+        const laneYs = [
+          obstacle.y - OBSTACLE_PADDING - 2,
+          obstacle.y + obstacle.h + OBSTACLE_PADDING + 2,
+        ];
+        for (const laneX of laneXs) {
+          evaluateCandidate([start, startOut, { x: laneX, y: startOut.y }, { x: laneX, y: endIn.y }, endIn, end], targetDirection);
+        }
+        for (const laneY of laneYs) {
+          evaluateCandidate([start, startOut, { x: startOut.x, y: laneY }, { x: endIn.x, y: laneY }, endIn, end], targetDirection);
+        }
+      }
+    }
+  }
+
+  const best = candidates.filter((candidate) => candidate.clean).sort((a, b) => a.cost - b.cost)[0] ?? candidates.sort((a, b) => a.cost - b.cost)[0];
+  const points = best?.points ?? [getPort(source, sourceBox, "right"), getPort(target, targetBox, "left")];
+  return routeFromPoints(points, best?.targetDirection ?? "left", Boolean(best?.clean));
+}
+
+function toSegments(points: Point[]): Segment[] {
+  return points.slice(1).map((point, index) => ({ a: points[index], b: point }));
+}
 
 function nearestPointOnRoute(point: Point, route: Route): { point: Point; segmentLength: number; distance: number; segment: Segment } | null {
   let best: { point: Point; segmentLength: number; distance: number; segment: Segment } | null = null;
@@ -131,6 +361,40 @@ function buildTextLines(label: string, boxW: number, isRoot: boolean): string[] 
     else for (let start = 0; start < rawLine.length; start += charsPerLine) lines.push(rawLine.slice(start, start + charsPerLine));
   }
   return lines;
+}
+
+interface DerivedRoute {
+  source: NodeData;
+  target: NodeData;
+  sourceNode: NodeData;
+  targetNode: NodeData;
+  route: Route;
+}
+
+export function buildDerivedRoutes(tree: TreeMap, override?: { nodeId: string; x: number; y: number }): DerivedRoute[] {
+  const nodes = getNodesFromTree(tree);
+  const edges = getEdgesFromTree(tree);
+  const rootId = tree.root?.id ?? null;
+  const positionOf = (node: NodeData): NodeData => override?.nodeId === node.id ? { ...node, x: override.x, y: override.y } : node;
+  const displayNodes = nodes.map(positionOf);
+  const boxes = new Map(displayNodes.map((node) => [node.id, getNodeBox(node, node.id === rootId)]));
+  const orderedEdges = [...edges].sort((a, b) => `${a.source.id}->${a.target.id}`.localeCompare(`${b.source.id}->${b.target.id}`));
+  const reservedRoutes: Array<{ key: string; segments: Segment[] }> = [];
+  return orderedEdges.map(({ source, target }) => {
+    const sourceNode = positionOf(source);
+    const targetNode = positionOf(target);
+    const sourceBox = boxes.get(source.id)!;
+    const targetBox = boxes.get(target.id)!;
+    const obstacleBoxes = displayNodes.filter((node) => node.id !== source.id && node.id !== target.id).map((node) => boxes.get(node.id)!);
+    const reverseKey = `${target.id}->${source.id}`;
+    const arrowObstacles = reservedRoutes.filter((entry) => entry.key !== reverseKey).flatMap((entry) => entry.segments);
+    const baseRoute = getOrthogonalRoute(sourceNode, targetNode, sourceBox, targetBox, obstacleBoxes, arrowObstacles);
+    const laneRoute = applyReverseLane(baseRoute, sourceNode, targetNode, sourceBox, targetBox, getReverseLane(source, target, orderedEdges));
+    const clean = laneRoute.clean && !routeHasSelfConflict(laneRoute.points) && !routeHasArrowConflict(laneRoute.points, arrowObstacles);
+    const route = clean === laneRoute.clean ? laneRoute : { ...laneRoute, clean };
+    reservedRoutes.push({ key: routeKey(source.id, target.id), segments: toSegments(route.points) });
+    return { source, target, sourceNode, targetNode, route };
+  });
 }
 
 export default function TreeCanvas({ tree }: TreeCanvasProps) {
@@ -256,8 +520,9 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       } else {
         testSource.children.push({ targetId: nodeId, color: "blue" });
         const testTree = { ...tree, nodeMap: testNodeMap, root: tree.root ? testNodeMap[tree.root.id] ?? null : null };
-        const candidateRoutes = buildDerivedRoutes(testTree);
-        if (hasIllegalRoute(candidateRoutes)) toast.message("No fully legal route", { description: "Move a node or choose another direction before adding this arrow." });
+        const baselineRoutes = new Map(buildDerivedRoutes(tree).map(({ source, target, route }) => [routeKey(source.id, target.id), route]));
+        const introducesProblems = introducesNewRouteProblems(baselineRoutes, buildDerivedRoutes(testTree));
+        if (introducesProblems) toast.message("Route would disrupt existing arrows", { description: "Move a node or choose another direction before adding this arrow." });
         else {
           dispatch({ type: "ADD_ARROW", treeId: tree.id, sourceId: connectSourceId, targetId: nodeId, color: "blue" });
           toast.success("Arrow added");
@@ -318,7 +583,8 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     }
     const point = worldPoint(e.clientX, e.clientY);
     if (!point) return;
-    dragRef.current = { nodeId: node.id, pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, moved: false, x: node.x, y: node.y };
+    const baselineRoutes = new Map(buildDerivedRoutes(tree).map(({ source, target, route }) => [routeKey(source.id, target.id), route]));
+    dragRef.current = { nodeId: node.id, pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, moved: false, x: node.x, y: node.y, baselineRoutes };
     try {
       e.currentTarget.setPointerCapture?.(e.pointerId);
     } catch {
@@ -341,7 +607,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
         if (!node) return;
         const candidate = { ...node, x: drag.x + point.x - startPoint.x, y: drag.y + point.y - startPoint.y };
         const routesForCandidate = buildDerivedRoutes(tree, { nodeId: drag.nodeId, x: candidate.x, y: candidate.y });
-        const valid = canPlaceNode(candidate, Object.values(tree.nodeMap), tree.root?.id ?? null, drag.nodeId) && !hasIllegalRoute(routesForCandidate);
+        const valid = canPlaceNode(candidate, Object.values(tree.nodeMap), tree.root?.id ?? null, drag.nodeId) && !introducesNewRouteProblems(drag.baselineRoutes, routesForCandidate);
         setDragPosition({ nodeId: drag.nodeId, x: candidate.x, y: candidate.y, valid });
       }
     }
@@ -570,18 +836,6 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
         {renderPlacementPreview()}
       </svg>
 
-      <div className="pointer-events-none absolute left-5 top-5 z-10 flex items-center gap-2 text-[#d7deef]" aria-label="Roamaps map instrument label">
-        <svg width="27" height="20" viewBox="0 0 27 20" fill="none" aria-hidden="true">
-          <path d="M 3 15 H 12 V 5 H 23" stroke="#4C7DFF" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-          <circle cx="3" cy="15" r="2" fill="#4C7DFF" />
-          <circle cx="12" cy="5" r="2" fill="#a5bfff" />
-          <circle cx="23" cy="5" r="2" fill="#4C7DFF" />
-        </svg>
-        <span className="font-['Space_Grotesk'] text-[11px] font-semibold tracking-[-0.04em]">ROAMAPS</span>
-        <span className="h-3 w-px bg-[#30384b]" />
-        <span className="font-mono text-[9px] tracking-[0.16em] text-[#77819a]">FIELD MODE</span>
-      </div>
-
       <div className="absolute left-5 top-16 z-10 flex max-w-[calc(100%-2.5rem)] flex-wrap items-center gap-2">
         <button onClick={() => { setAddNodeMode((mode) => !mode); setConnectMode(false); setConnectSourceId(null); setPlacementPreview(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${addNodeMode ? "border-[#8bb7ff] bg-[#8bb7ff]/15 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#3B82F6]/60 hover:text-white"}`} title="Place one node"><Plus className="h-4 w-4" />{addNodeMode ? "Place node" : "Add node"}</button>
         <button onClick={() => { setConnectMode((mode) => !mode); setAddNodeMode(false); setConnectSourceId(null); setPlacementPreview(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${connectMode ? "border-[#3B82F6] bg-[#3B82F6]/15 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#3B82F6]/60 hover:text-white"}`} title="Connect two nodes"><Link2 className="h-4 w-4" /><span>{connectMode ? (connectSourceId ? "Select target" : "Select source") : "Connect nodes"}</span></button>
@@ -598,15 +852,6 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
         <button onClick={() => zoomByFactor(1.25)} className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#2a2a35] bg-[#13131a] text-[#e4e4e7] transition-all hover:border-[#3a3a45] hover:bg-[#1a1a24] active:scale-95" title="Zoom out"><Minus className="h-5 w-5" strokeWidth={1.5} /></button>
         <button onClick={fitToContent} className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#2a2a35] bg-[#13131a] text-[#e4e4e7] transition-all hover:border-[#3a3a45] hover:bg-[#1a1a24] active:scale-95" title="Fit all content"><Home className="h-5 w-5" strokeWidth={1.5} /></button>
       </div>
-
-      <div className="pointer-events-none absolute bottom-6 left-5 z-10 border-l border-[#4C7DFF]/75 pl-3 font-mono text-[9px] uppercase tracking-[0.16em] text-[#7f8aa3]">
-        <div className="mb-1 flex items-center gap-2 text-[#b9c8e9]"><span className="h-1.5 w-1.5 rounded-full bg-[#4C7DFF] shadow-[0_0_10px_rgba(76,125,255,0.7)]" />Local map ready</div>
-        <div>{nodes.length} nodes · {routes.length} routes · grid 30</div>
-      </div>
-      {nodes.length === 0 && <div className="pointer-events-none absolute bottom-20 left-5 z-10 max-w-[18rem] border-l-2 border-[#303b57] pl-3 text-[#a7b0c4]">
-        <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-[#4C7DFF]">Map field empty</p>
-        <p className="mt-1 font-['Space_Grotesk'] text-xs leading-5">Place a node, then draw the route.</p>
-      </div>}
 
       {actionPanelTarget && <ActionPanel x={actionPanelScreenPos.x} y={actionPanelScreenPos.y} target={actionPanelTarget} tree={tree} dispatch={dispatch} onClose={() => setActionPanelTarget(null)} />}
       {popupNodeId && tree.nodeMap[popupNodeId] && <NodePopup

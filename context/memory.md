@@ -2,6 +2,14 @@
 
 ## Current milestone
 
+## Exact-router recovery incident — 2026-08-20
+
+The published exact-router rewrite was withdrawn immediately after the user’s tablet trial. The user provided a Tree 2 screenshot showing diagonal arrows from the main node, ordinary node moves and new connections rejected as “no legal path,” and an apparently active Undo control. This is a blocking regression, not an acceptable partial implementation.
+
+The confirmed direct cause of the diagonal lines is the exact router’s no-solution fallback: it returned a two-point source-right to target-left SVG path even when those points were not aligned. That fallback is therefore diagonal by construction, and the canvas rendered it despite `clean: false`. The action freeze followed because the new strict all-routes-legal gate evaluated the dense saved roadmap as a whole, including its deliberately unsolved crowded root fan-out; every unrelated structural action was then rejected. This is incompatible with the current deferred crowded-port scope.
+
+The live project was safely rolled back through WebDev to checkpoint `757b8d6e`, creating recovery version `64e85e1a`. The recovered code passes TypeScript, its original third-node orthogonal-routing test, and a production build. In a fresh recovered browser state, both Undo and Redo have native `disabled=true` and `aria-disabled=true`; any visual or interaction complaint must be reproduced on the user’s persisted Tree 2 before changing history logic. Do not reintroduce the exact-router branch without a saved-data Tree 2 test that proves every rendered route is orthogonal and that ordinary actions remain available.
+
 ## Exact faster-router implementation — active 2026-08-20
 
 The routing foundation is now extracted into `client/src/lib/routingEngine.ts` in the live WebDev project. The former candidate-only search and all duplicate canvas routing code have been removed. The active router uses deterministic sparse orthogonal graph search with lazy exact discovery of relevant padded node boxes and reserved arrow lanes. It independently verifies each candidate against the full geometry before returning it, and selects **shortest length → fewer obstacles → fewer bends → stable top/left geometry**. It marks a route non-clean when no complete legal path exists. The independent `verifyRoute` checker now enforces non-orthogonality, node collision, exact 12-unit parallel separation, self-overlap, arrowhead clearance, and source/target perpendicular boundary attachment when endpoint context is supplied.
