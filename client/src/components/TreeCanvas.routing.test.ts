@@ -94,13 +94,33 @@ describe("getOrthogonalRoute", () => {
     const rightRoute = routes.get("right")!;
 
     expect([leftRoute, centreRoute, rightRoute].every((route) => route.clean)).toBe(true);
-    expect([leftRoute, centreRoute, rightRoute].every((route) => route.targetDirection === "down")).toBe(true);
     expect(centreRoute.points).toHaveLength(2);
+    expect(centreRoute.targetDirection).toBe("down");
+    // The centre child is an obstacle to the outer one-bend candidates, so
+    // legal routing correctly retains two bends for the outer siblings.
     expect(leftRoute.points).toHaveLength(4);
     expect(rightRoute.points).toHaveLength(4);
+    expect(leftRoute.targetDirection).toBe("down");
+    expect(rightRoute.targetDirection).toBe("down");
     expect(leftRoute.points[0].x).toBeLessThan(centreRoute.points[0].x);
     expect(centreRoute.points[0].x).toBeLessThan(rightRoute.points[0].x);
     expect(leftRoute.points[1].x).toBe(leftRoute.points[0].x);
     expect(rightRoute.points[1].x).toBe(rightRoute.points[0].x);
+  });
+
+  it("uses the real Tree 2 fan-outs to prefer legal one-bend side pairs", () => {
+    const tree2 = allTrees.find((tree) => tree.id === "tree-2");
+    expect(tree2).toBeDefined();
+
+    const routes = new Map(buildDerivedRoutes(tree2!).map(({ source, target, route }) => [`${source.id}->${target.id}`, route]));
+    const upwardCentre = routes.get("t2-a1->t2-b3")!;
+    const upwardLeft = routes.get("t2-a1->t2-b1")!;
+    const upwardRight = routes.get("t2-a1->t2-b2")!;
+    const leftUpper = routes.get("t2-a2->t2-b4")!;
+    const leftLower = routes.get("t2-a2->t2-b5")!;
+
+    expect([upwardCentre, upwardLeft, upwardRight, leftUpper, leftLower].every((route) => route.clean)).toBe(true);
+    expect(upwardCentre.points).toHaveLength(2);
+    expect([upwardLeft, upwardRight, leftUpper, leftLower].every((route) => route.points.length === 3)).toBe(true);
   });
 });

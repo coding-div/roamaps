@@ -163,17 +163,21 @@ function buildEdgePortPlans(
 ): Map<string, EdgePortPlan> {
   const endpoints: PlannedEndpoint[] = edges.flatMap(({ source, target }) => {
     const key = routeKey(source.id, target.id);
-    const sourceDirection = directionTowards(source, target);
     const fanout = fanoutPlacements.get(key);
-    const targetDirections = fanout ? [oppositeDirection(fanout.direction)] : PORT_DIRECTIONS;
+    // Obsidian Cartography routing: expose every legal endpoint-side pair to
+    // the router so it can rank complete paths by legality, bends, and length.
+    // A grouped fan-out keeps only its shared source-facing side, preserving
+    // evenly spaced, centre-outward exits; targets remain independently free.
+    const sourceDirections = fanout ? [fanout.direction] : PORT_DIRECTIONS;
+    const targetDirections = PORT_DIRECTIONS;
     return [
-      {
+      ...sourceDirections.map((direction) => ({
         key,
         role: "source" as const,
         node: source,
         peer: target,
-        direction: fanout?.direction ?? sourceDirection,
-      },
+        direction,
+      })),
       ...targetDirections.map((direction) => ({
         key,
         role: "target" as const,
@@ -206,6 +210,21 @@ function buildEdgePortPlans(
     plan.targetPorts.sort((a: PrototypePort, b: PrototypePort) => PORT_DIRECTIONS.indexOf(a.direction) - PORT_DIRECTIONS.indexOf(b.direction));
   }
   return plans;
+}
+
+function compareFanoutReservation(
+  a: { source: NodeData; target: NodeData },
+  b: { source: NodeData; target: NodeData },
+  placements: Map<string, FanoutPlacement>,
+): number {
+  const aPlacement = placements.get(routeKey(a.source.id, a.target.id));
+  const bPlacement = placements.get(routeKey(b.source.id, b.target.id));
+  if (aPlacement?.groupKey === bPlacement?.groupKey && aPlacement && bPlacement) {
+    const aDistance = Math.abs(aPlacement.index - (aPlacement.total - 1) / 2);
+    const bDistance = Math.abs(bPlacement.index - (bPlacement.total - 1) / 2);
+    return aDistance - bDistance || aPlacement.index - bPlacement.index || routeKey(a.source.id, a.target.id).localeCompare(routeKey(b.source.id, b.target.id));
+  }
+  return routeKey(a.source.id, a.target.id).localeCompare(routeKey(b.source.id, b.target.id));
 }
 
 function isHorizontal(segment: Segment): boolean { return segment.a.y === segment.b.y; }
@@ -423,25 +442,27 @@ export function buildDerivedRoutes(tree: TreeMap, override?: { nodeId: string; x
   const boxes = new Map(displayNodes.map((node) => [node.id, getNodeBox(node, node.id === rootId)]));
   const orderedEdges = [...edges].sort((a, b) => `${a.source.id}->${a.target.id}`.localeCompare(`${b.source.id}->${b.target.id}`));
   const positionedEdges = orderedEdges.map(({ source, target }) => ({ source: positionOf(source), target: positionOf(target) }));
-  const portPlans = buildEdgePortPlans(positionedEdges, boxes, buildFanoutPlacements(positionedEdges));
+  const fanoutPlacements = buildFanoutPlacements(positionedEdges);
+  const portPlans = buildEdgePortPlans(positionedEdges, boxes, fanoutPlacements);
+  const reservationEdges = [...positionedEdges].sort((a, b) => compareFanoutReservation(a, b, fanoutPlacements));
   const reservedRoutes: Array<{ key: string; segments: Segment[] }> = [];
-  return orderedEdges.map(({ source, target }) => {
-    const sourceNode = positionOf(source);
-    const targetNode = positionOf(target);
-    const sourceBox = boxes.get(source.id)!;
-    const targetBox = boxes.get(target.id)!;
-    const obstacleBoxes = displayNodes.filter((node) => node.id !== source.id && node.id !== target.id).map((node) => boxes.get(node.id)!);
-    const reverseKey = `${target.id}->${source.id}`;
+  const routesByKey = new Map<string, DerivedRoute>();
+  for (const { source: sourceNode, target: targetNode } of reservationEdges) {
+    const sourceBox = boxes.get(sourceNode.id)!;
+    const targetBox = boxes.get(targetNode.id)!;
+    const obstacleBoxes = displayNodes.filter((node) => node.id !== sourceNode.id && node.id !== targetNode.id).map((node) => boxes.get(node.id)!);
+    const reverseKey = `${targetNode.id}->${sourceNode.id}`;
     const arrowObstacles = reservedRoutes.filter((entry) => entry.key !== reverseKey).flatMap((entry) => entry.segments);
-    const baseRoute = getOrthogonalRoute(sourceNode, targetNode, sourceBox, targetBox, obstacleBoxes, arrowObstacles, portPlans.get(routeKey(source.id, target.id)));
+    const baseRoute = getOrthogonalRoute(sourceNode, targetNode, sourceBox, targetBox, obstacleBoxes, arrowObstacles, portPlans.get(routeKey(sourceNode.id, targetNode.id)));
     const laneRoute = baseRoute.points.length < 2
       ? baseRoute
-      : applyReverseLane(baseRoute, sourceNode, targetNode, sourceBox, targetBox, getReverseLane(source, target, orderedEdges));
+      : applyReverseLane(baseRoute, sourceNode, targetNode, sourceBox, targetBox, getReverseLane(sourceNode, targetNode, orderedEdges));
     const clean = laneRoute.clean && !routeHasSelfConflict(laneRoute.points) && !routeHasArrowConflict(laneRoute.points, arrowObstacles);
     const route = clean === laneRoute.clean ? laneRoute : { ...laneRoute, clean };
-    if (route.points.length >= 2) reservedRoutes.push({ key: routeKey(source.id, target.id), segments: toSegments(route.points) });
-    return { source, target, sourceNode, targetNode, route };
-  });
+    if (route.points.length >= 2) reservedRoutes.push({ key: routeKey(sourceNode.id, targetNode.id), segments: toSegments(route.points) });
+    routesByKey.set(routeKey(sourceNode.id, targetNode.id), { source: sourceNode, target: targetNode, sourceNode, targetNode, route });
+  }
+  return orderedEdges.map(({ source, target }) => routesByKey.get(routeKey(source.id, target.id))!);
 }
 
 export default function TreeCanvas({ tree }: TreeCanvasProps) {
