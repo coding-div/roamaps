@@ -25,9 +25,10 @@ import {
 import { useRoadmaps } from "@/contexts/RoadmapContext";
 import { findProgressivePrototypeRoute, PrototypeLaneIndex, type PrototypeNode, type PrototypePort, type PrototypeSegment } from "@/lib/progressiveRouter";
 import { toast } from "sonner";
-import { Grid3X3, Home, Link2, Minus, MousePointer2, Plus, Redo2, RotateCcw, Undo2 } from "lucide-react";
+import { Grid3X3, Home, Link2, Minus, MousePointer2, Plus, Redo2, RotateCcw, Undo2, WandSparkles } from "lucide-react";
 import ActionPanel from "./ActionPanel";
 import NodePopup from "./NodePopup";
+import { Spinner } from "./ui/spinner";
 
 interface TreeCanvasProps {
   tree: TreeMap;
@@ -461,7 +462,7 @@ function buildTextLines(label: string, boxW: number, isRoot: boolean): string[] 
   return lines;
 }
 
-interface DerivedRoute {
+export interface DerivedRoute {
   source: NodeData;
   target: NodeData;
   sourceNode: NodeData;
@@ -469,7 +470,33 @@ interface DerivedRoute {
   route: Route;
 }
 
-export function buildDerivedRoutes(tree: TreeMap, override?: { nodeId: string; x: number; y: number }, routeTimings?: number[]): DerivedRoute[] {
+export interface RouteRefreshScore {
+  routeErrors: number;
+  bends: number;
+  length: number;
+}
+
+export function getRouteRefreshScore(routes: DerivedRoute[]): RouteRefreshScore {
+  return routes.reduce<RouteRefreshScore>((score, { route }) => {
+    const length = route.points.slice(1).reduce((total, point, index) => total + Math.hypot(point.x - route.points[index].x, point.y - route.points[index].y), 0);
+    return {
+      routeErrors: score.routeErrors + (route.clean ? 0 : 1),
+      bends: score.bends + Math.max(0, route.points.length - 2),
+      length: score.length + length,
+    };
+  }, { routeErrors: 0, bends: 0, length: 0 });
+}
+
+export function compareRouteRefreshScores(left: RouteRefreshScore, right: RouteRefreshScore): number {
+  return left.routeErrors - right.routeErrors || left.bends - right.bends || left.length - right.length;
+}
+
+export function buildDerivedRoutes(
+  tree: TreeMap,
+  override?: { nodeId: string; x: number; y: number },
+  routeTimings?: number[],
+  reservationOrder: "normal" | "reversed" = "normal",
+): DerivedRoute[] {
   const nodes = getNodesFromTree(tree);
   const edges = getEdgesFromTree(tree);
   const rootId = tree.root?.id ?? null;
@@ -480,7 +507,10 @@ export function buildDerivedRoutes(tree: TreeMap, override?: { nodeId: string; x
   const positionedEdges = orderedEdges.map(({ source, target }) => ({ source: positionOf(source), target: positionOf(target) }));
   const fanoutPlacements = buildFanoutPlacements(positionedEdges);
   const portPlans = buildEdgePortPlans(positionedEdges, boxes, fanoutPlacements);
-  const reservationEdges = [...positionedEdges].sort((a, b) => compareFanoutReservation(a, b, fanoutPlacements));
+  const reservationEdges = [...positionedEdges].sort((a, b) => {
+    const comparison = compareFanoutReservation(a, b, fanoutPlacements);
+    return reservationOrder === "reversed" ? -comparison : comparison;
+  });
   const reservedRoutes: Array<{ key: string; segments: Segment[] }> = [];
   const reservedLaneIndex = new PrototypeLaneIndex();
   const routesByKey = new Map<string, DerivedRoute>();
@@ -513,6 +543,19 @@ export function buildDerivedRoutes(tree: TreeMap, override?: { nodeId: string; x
   return orderedEdges.map(({ source, target }) => routesByKey.get(routeKey(source.id, target.id))!);
 }
 
+/**
+ * All Set evaluates two deterministic whole-map reservation passes. It never
+ * edits the roadmap: errors win first, then fewer bends, then shorter total
+ * arrow length. The existing plan wins exact ties, preventing visual churn.
+ */
+export function buildAllSetRoutes(tree: TreeMap): DerivedRoute[] {
+  const currentPlan = buildDerivedRoutes(tree);
+  const alternatePlan = buildDerivedRoutes(tree, undefined, undefined, "reversed");
+  return compareRouteRefreshScores(getRouteRefreshScore(alternatePlan), getRouteRefreshScore(currentPlan)) < 0
+    ? alternatePlan
+    : currentPlan;
+}
+
 export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const { dispatch, canUndo, canRedo } = useRoadmaps();
   const svgRef = useRef<SVGSVGElement>(null);
@@ -522,6 +565,8 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const [connectSourceId, setConnectSourceId] = useState<string | null>(null);
   const [dragPosition, setDragPosition] = useState<DragPreview | null>(null);
   const [placementPreview, setPlacementPreview] = useState<PlacementPreview | null>(null);
+  const [allSetResult, setAllSetResult] = useState<{ tree: TreeMap; routes: DerivedRoute[] } | null>(null);
+  const [isAllSetPending, setIsAllSetPending] = useState(false);
   const [snapToGrid, setSnapToGrid] = useState(() => {
     try {
       return localStorage.getItem(SNAP_TO_GRID_STORAGE_KEY) === "true";
@@ -544,10 +589,16 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressActive = useRef(false);
   const arrowPressRef = useRef<ArrowPressState | null>(null);
+  const allSetPendingRef = useRef(false);
+  const latestTreeRef = useRef(tree);
   // The committed route set is calculated once per roadmap change. Pointer
   // handlers and render reuse it so a dense Tree 2 long press never starts by
   // synchronously deriving all routes a second time.
   const committedRoutes = useMemo(() => buildDerivedRoutes(tree), [tree]);
+
+  useEffect(() => {
+    latestTreeRef.current = tree;
+  }, [tree]);
 
   useEffect(() => {
     try {
@@ -776,6 +827,34 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     dragRef.current = null;
   }
 
+  function refreshAllRoutes() {
+    if (allSetPendingRef.current) return;
+    const treeAtStart = tree;
+    const previousRoutes = allSetResult?.tree === tree ? allSetResult.routes : committedRoutes;
+    const previousScore = getRouteRefreshScore(previousRoutes);
+    allSetPendingRef.current = true;
+    setIsAllSetPending(true);
+
+    // Two frames let the browser paint the requested progress circle before
+    // the complete route calculation begins on dense tablet roadmaps.
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      const refreshedRoutes = buildAllSetRoutes(treeAtStart);
+      allSetPendingRef.current = false;
+      setIsAllSetPending(false);
+      if (latestTreeRef.current !== treeAtStart) {
+        toast.message("Map changed during recalculation", { description: "All Set left the newest node positions untouched." });
+        return;
+      }
+      setAllSetResult({ tree: treeAtStart, routes: refreshedRoutes });
+      const refreshedScore = getRouteRefreshScore(refreshedRoutes);
+      if (compareRouteRefreshScores(refreshedScore, previousScore) < 0) {
+        toast.success("Arrows improved", { description: "All Set applied the cleanest available full-map lanes." });
+      } else {
+        toast.success("All arrows checked", { description: "The current node positions already use the best available lanes." });
+      }
+    }));
+  }
+
   function beginArrowPointer(e: React.PointerEvent<SVGPathElement>, sourceId: string, targetId: string, route: Route) {
     e.preventDefault();
     e.stopPropagation();
@@ -897,7 +976,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const positionOverride = dragPosition ? { nodeId: dragPosition.nodeId, x: dragPosition.x, y: dragPosition.y } : undefined;
   const positionOf = (node: NodeData): NodeData => positionOverride?.nodeId === node.id ? { ...node, x: positionOverride.x, y: positionOverride.y } : node;
   const displayNodes = useMemo(() => nodes.map(positionOf), [nodes, positionOverride?.nodeId, positionOverride?.x, positionOverride?.y]);
-  const routes = dragPosition?.routes ?? committedRoutes;
+  const routes = dragPosition?.routes ?? (allSetResult?.tree === tree ? allSetResult.routes : committedRoutes);
   const bridgePoints = useMemo(() => routes.map((current, index) => {
     const currentSegments = toSegments(current.route.points);
     const crossings: Array<{ point: Point; segment: Segment }> = [];
@@ -1010,6 +1089,15 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
           title={snapToGrid ? "Grid snap is on — drag to align nodes to dots" : "Grid snap is off — drag nodes freely"}
         >
           <Grid3X3 className="h-4 w-4" />Snap {snapToGrid ? "on" : "off"}
+        </button>
+        <button
+          onClick={refreshAllRoutes}
+          disabled={isAllSetPending}
+          className="flex items-center gap-2 rounded-lg border border-[#3459b8] bg-[#1e3a8a]/20 px-3 py-2 text-xs text-[#dbeafe] transition-all hover:border-[#5d87ff] hover:bg-[#2a4ca0]/25 active:scale-95 disabled:cursor-wait disabled:opacity-80"
+          title="Recalculate every arrow without moving nodes"
+        >
+          {isAllSetPending ? <Spinner className="h-4 w-4 text-[#8bb7ff]" /> : <WandSparkles className="h-4 w-4" />}
+          {isAllSetPending ? "Setting arrows…" : "All Set"}
         </button>
         <div className="flex items-center gap-1 rounded-lg border border-[#2a2a35] bg-[#13131a] p-1">
           <button onClick={() => { if (canUndo) dispatch({ type: "UNDO" }); }} disabled={!canUndo} aria-disabled={!canUndo} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white disabled:pointer-events-none disabled:cursor-not-allowed disabled:text-[#4a4a56] disabled:hover:bg-transparent disabled:hover:text-[#4a4a56]" title="Undo"><Undo2 className="h-4 w-4" /></button>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getNodeBox } from "@/lib/collision";
 import { allTrees, getAllEdges, type NodeData, type TreeMap } from "@/lib/treeData";
-import { buildDerivedRoutes, buildEdgePortPlans, getOrthogonalRoute, resolveDraggedNodeCentre, snapNodeCentreToGrid } from "./TreeCanvas";
+import { buildAllSetRoutes, buildDerivedRoutes, buildEdgePortPlans, compareRouteRefreshScores, getOrthogonalRoute, getRouteRefreshScore, resolveDraggedNodeCentre, snapNodeCentreToGrid } from "./TreeCanvas";
 
 function node(id: string, x: number, y: number): NodeData {
   return { id, x, y, label: "", color: "blue", children: [], popupContent: "" };
@@ -196,5 +196,17 @@ describe("getOrthogonalRoute", () => {
     // This deliberately has generous CI headroom while still rejecting the
     // former 350–1,000 ms full-map path that froze a tablet drag gesture.
     expect(performance.now() - startedAt).toBeLessThan(160);
+  });
+
+  it("evaluates a whole-map All Set route plan without moving any nodes or accepting a worse result", () => {
+    const tree2 = allTrees.find((tree) => tree.id === "tree-2");
+    expect(tree2).toBeDefined();
+    const beforePositions = Object.fromEntries(Object.values(tree2!.nodeMap).map((current) => [current.id, { x: current.x, y: current.y }]));
+    const currentRoutes = buildDerivedRoutes(tree2!);
+    const refreshedRoutes = buildAllSetRoutes(tree2!);
+
+    expect(Object.fromEntries(Object.values(tree2!.nodeMap).map((current) => [current.id, { x: current.x, y: current.y }]))).toEqual(beforePositions);
+    expect(refreshedRoutes.map(({ source, target }) => `${source.id}->${target.id}`)).toEqual(currentRoutes.map(({ source, target }) => `${source.id}->${target.id}`));
+    expect(compareRouteRefreshScores(getRouteRefreshScore(refreshedRoutes), getRouteRefreshScore(currentRoutes))).toBeLessThanOrEqual(0);
   });
 });
