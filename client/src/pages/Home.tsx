@@ -6,9 +6,21 @@
 
 import { useLocation } from "wouter";
 import { useEffect, useState } from "react";
-import { GitBranch, Plus, ArrowUpRight } from "lucide-react";
+import { GitBranch, Plus, ArrowUpRight, Grid3X3, List } from "lucide-react";
 import { useRoadmaps } from "@/contexts/RoadmapContext";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { TreeMap } from "@/lib/treeData";
+
+const HOME_LAYOUT_STORAGE_KEY = "roamaps-home-layout-v1";
+type HomeLayout = "box" | "list";
+
+function loadHomeLayout(): HomeLayout {
+  try {
+    return localStorage.getItem(HOME_LAYOUT_STORAGE_KEY) === "list" ? "list" : "box";
+  } catch {
+    return "box";
+  }
+}
 
 function createNewTree(index: number): TreeMap {
   const id = `tree-${Date.now()}`;
@@ -28,11 +40,20 @@ export default function Home() {
   const [, navigate] = useLocation();
   const { trees, dispatch } = useRoadmaps();
   const [visible, setVisible] = useState(false);
+  const [roadmapLayout, setRoadmapLayout] = useState<HomeLayout>(loadHomeLayout);
 
   useEffect(() => {
     const timer = setTimeout(() => setVisible(true), 50);
     return () => clearTimeout(timer);
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(HOME_LAYOUT_STORAGE_KEY, roadmapLayout);
+    } catch {
+      // A layout choice is optional; the default box view still works without storage.
+    }
+  }, [roadmapLayout]);
 
   function handleCreate() {
     const tree = createNewTree(trees.length + 1);
@@ -71,13 +92,29 @@ export default function Home() {
         </section>
 
         <section className="mt-28 max-w-6xl lg:mt-40">
-          <div className="mb-5 flex items-end justify-between border-b border-[#1d2230] pb-3"><div><p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[#68708a]">01 / Your roadmaps</p><p className="mt-2 text-sm text-[#71798d]">Open a route or place a new pin.</p></div><button onClick={handleCreate} className="hidden items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-[#8195d8] transition-colors hover:text-white sm:flex">New roadmap <ArrowUpRight className="h-3.5 w-3.5" /></button></div>
-          <div className="grid max-w-5xl grid-cols-1 gap-5 md:grid-cols-[1.08fr_0.92fr]">
-            {trees.map((tree, index) => (
+          <div className="mb-5 flex items-end justify-between gap-4 border-b border-[#1d2230] pb-3">
+            <div><p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[#68708a]">01 / Your roadmaps</p><p className="mt-2 text-sm text-[#71798d]">Open a route or place a new pin.</p></div>
+            <div className="flex items-center gap-4">
+              <ToggleGroup type="single" value={roadmapLayout} onValueChange={(layout) => { if (layout === "box" || layout === "list") setRoadmapLayout(layout); }} aria-label="Roadmap display format" className="border border-[#283043] bg-[#0d1018] p-0.5">
+                <ToggleGroupItem value="box" aria-label="Box layout" title="Box layout" className="h-8 min-w-8 border-0 px-2 text-[#6d7895] hover:bg-[#151b29] hover:text-white data-[state=on]:bg-[#1d2d52] data-[state=on]:text-[#9ab4ff]"><Grid3X3 className="h-4 w-4" /></ToggleGroupItem>
+                <ToggleGroupItem value="list" aria-label="List layout" title="List layout" className="h-8 min-w-8 border-0 px-2 text-[#6d7895] hover:bg-[#151b29] hover:text-white data-[state=on]:bg-[#1d2d52] data-[state=on]:text-[#9ab4ff]"><List className="h-4 w-4" /></ToggleGroupItem>
+              </ToggleGroup>
+              <button onClick={handleCreate} className="hidden items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-[#8195d8] transition-colors hover:text-white sm:flex">New roadmap <ArrowUpRight className="h-3.5 w-3.5" /></button>
+            </div>
+          </div>
+          <div className={roadmapLayout === "box" ? "grid max-w-5xl grid-cols-1 gap-5 md:grid-cols-[1.08fr_0.92fr]" : "max-w-5xl divide-y divide-[#202637] border-y border-[#202637]"}>
+            {trees.map((tree, index) => roadmapLayout === "box" ? (
               <button key={tree.id} onClick={() => navigate(`/tree/${tree.id.replace("tree-", "")}`)} className={`group relative overflow-hidden rounded-[4px] border border-[#222837] bg-[#10131b]/90 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-[#4c7dff]/55 hover:bg-[#131824] active:scale-[0.99] ${index === 1 ? "md:translate-y-8" : ""}`} style={{ opacity: visible ? 1 : 0, transform: visible ? undefined : "translateY(14px)", transitionDelay: `${180 + index * 70}ms` }}>
                 <div className="absolute inset-y-0 left-0 w-[3px] bg-[#4c7dff]/35 transition-colors group-hover:bg-[#4c7dff]" /><div className="absolute left-[-2px] top-7 h-1 w-1 bg-[#4c7dff]" /><div className="absolute right-4 top-3 font-mono text-[8px] tracking-[0.18em] text-[#3f4961]">X 0{index + 2} · Y 1{index + 4}</div><div className="pointer-events-none absolute right-[-16px] top-10 h-20 w-20 rounded-l-full border border-[#4c7dff]/10" /><div className="pointer-events-none absolute right-[-4px] top-[4.5rem] h-px w-16 bg-[#4c7dff]/20" />
                 <div className="relative h-32 overflow-hidden border-b border-[#1d2230] bg-[#0c0f16]"><img src={index % 2 === 0 ? "/manus-storage/roamaps-tree-preview-a_c0166a80.png" : "/manus-storage/roamaps-tree-preview-b_1ff7c59e.png"} alt="" className="h-full w-full object-cover opacity-80 transition-transform duration-500 group-hover:scale-[1.04]" /><div className="absolute inset-0 bg-gradient-to-t from-[#10131b] via-transparent to-transparent" /><span className="absolute bottom-3 left-4 font-mono text-[8px] uppercase tracking-[0.22em] text-[#7581a0]">Plotted route / {String(index + 1).padStart(2, "0")}</span></div>
                 <div className="relative p-5"><div className="mb-5 flex items-center justify-between"><span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#5c6680]">Map {String(index + 1).padStart(2, "0")} / archive</span><span className="flex items-center gap-2"><span className="font-mono text-[8px] uppercase tracking-[0.16em] text-[#3f4961]">route glyph</span><GitBranch className="h-4 w-4 text-[#4c7dff]/80" strokeWidth={1.4} /></span></div><h2 className="font-['Space_Grotesk',sans-serif] text-xl font-medium tracking-[-0.03em] text-[#e9ecf5]">{tree.title}</h2><p className="mt-1.5 text-sm text-[#737b8e]">{tree.description}</p><div className="mt-6 flex items-center gap-4 font-mono text-[10px] uppercase tracking-[0.13em] text-[#565f75]"><span>{Object.keys(tree.nodeMap).length} nodes</span><span>{tree.maxDepth} levels</span><span className="ml-auto text-[#7888bd] transition-transform group-hover:translate-x-1">Open →</span></div></div>
+              </button>
+            ) : (
+              <button key={tree.id} onClick={() => navigate(`/tree/${tree.id.replace("tree-", "")}`)} className="group relative flex w-full items-center gap-4 overflow-hidden bg-[#0f131c]/72 px-4 py-3 text-left transition-colors duration-200 hover:bg-[#141c2b] active:scale-[0.995] sm:gap-5 sm:px-5">
+                <span className="absolute inset-y-0 left-0 w-[3px] bg-[#4c7dff]/35 transition-colors group-hover:bg-[#4c7dff]" />
+                <div className="relative h-14 w-20 shrink-0 overflow-hidden border border-[#252d40] bg-[#0c0f16] sm:h-16 sm:w-28"><img src={index % 2 === 0 ? "/manus-storage/roamaps-tree-preview-a_c0166a80.png" : "/manus-storage/roamaps-tree-preview-b_1ff7c59e.png"} alt="" className="h-full w-full object-cover opacity-75 transition-transform duration-300 group-hover:scale-[1.04]" /><span className="absolute bottom-1 left-1.5 font-mono text-[6px] uppercase tracking-[0.16em] text-[#a4b2d6]">Route {String(index + 1).padStart(2, "0")}</span></div>
+                <div className="min-w-0 flex-1"><div className="mb-1 flex items-center gap-2"><span className="font-mono text-[9px] uppercase tracking-[0.18em] text-[#65708c]">Map {String(index + 1).padStart(2, "0")}</span><GitBranch className="h-3.5 w-3.5 text-[#4c7dff]/80" strokeWidth={1.4} /></div><h2 className="truncate font-['Space_Grotesk',sans-serif] text-base font-medium tracking-[-0.025em] text-[#edf0f8] sm:text-lg">{tree.title}</h2><p className="mt-0.5 truncate text-xs text-[#778096] sm:text-sm">{tree.description}</p></div>
+                <div className="hidden items-center gap-4 font-mono text-[9px] uppercase tracking-[0.13em] text-[#65708b] sm:flex"><span>{Object.keys(tree.nodeMap).length} nodes</span><span>{tree.maxDepth} levels</span></div><span className="font-mono text-[10px] uppercase tracking-[0.14em] text-[#8195d8] transition-transform group-hover:translate-x-1">Open →</span>
               </button>
             ))}
           </div>

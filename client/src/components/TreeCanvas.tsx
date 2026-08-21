@@ -25,7 +25,7 @@ import {
 import { useRoadmaps } from "@/contexts/RoadmapContext";
 import { findProgressivePrototypeRoute, PrototypeLaneIndex, type PrototypeNode, type PrototypePort, type PrototypeSegment } from "@/lib/progressiveRouter";
 import { toast } from "sonner";
-import { Home, Link2, Minus, MousePointer2, Plus, Redo2, RotateCcw, Undo2 } from "lucide-react";
+import { Grid3X3, Home, Link2, Minus, MousePointer2, Plus, Redo2, RotateCcw, Undo2 } from "lucide-react";
 import ActionPanel from "./ActionPanel";
 import NodePopup from "./NodePopup";
 
@@ -46,6 +46,7 @@ const ARROW_PRESS_MOVE_THRESHOLD = 10;
 const NODE_DRAG_START_THRESHOLD = 4;
 const LANE_GAP = 12;
 const PORT_DIRECTIONS: Direction[] = ["up", "left", "down", "right"];
+const SNAP_TO_GRID_STORAGE_KEY = "roamaps-snap-to-grid-v1";
 
 interface ViewBox { x: number; y: number; w: number; h: number }
 interface Segment { a: Point; b: Point }
@@ -64,6 +65,14 @@ export function snapNodeCentreToGrid(point: Point): Point {
   const gridOrigin = GRID_SIZE / 2;
   const snapAxis = (value: number) => Math.round((value - gridOrigin) / GRID_SIZE) * GRID_SIZE + gridOrigin;
   return { x: snapAxis(point.x), y: snapAxis(point.y) };
+}
+
+/**
+ * The map grid is an optional drafting aid. When it is off, node movement
+ * retains the exact finger-derived world position before normal validation.
+ */
+export function resolveDraggedNodeCentre(point: Point, snapToGrid: boolean): Point {
+  return snapToGrid ? snapNodeCentreToGrid(point) : point;
 }
 
 function routeKey(sourceId: string, targetId: string): string {
@@ -513,6 +522,13 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const [connectSourceId, setConnectSourceId] = useState<string | null>(null);
   const [dragPosition, setDragPosition] = useState<DragPreview | null>(null);
   const [placementPreview, setPlacementPreview] = useState<PlacementPreview | null>(null);
+  const [snapToGrid, setSnapToGrid] = useState(() => {
+    try {
+      return localStorage.getItem(SNAP_TO_GRID_STORAGE_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
   const dragRef = useRef<DragState | null>(null);
   const [viewBox, setViewBox] = useState<ViewBox>(() => tree.maxDepth <= 3 ? { x: -500, y: -700, w: 1000, h: 1400 } : { x: -1400, y: -1600, w: 2800, h: 3200 });
   const [isPanning, setIsPanning] = useState(false);
@@ -532,6 +548,14 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   // handlers and render reuse it so a dense Tree 2 long press never starts by
   // synchronously deriving all routes a second time.
   const committedRoutes = useMemo(() => buildDerivedRoutes(tree), [tree]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SNAP_TO_GRID_STORAGE_KEY, String(snapToGrid));
+    } catch {
+      // The editor remains usable when browser storage is unavailable.
+    }
+  }, [snapToGrid]);
 
   const worldPoint = useCallback((clientX: number, clientY: number): Point | null => {
     const svg = svgRef.current;
@@ -716,8 +740,8 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       if (point && startPoint) {
         const node = tree.nodeMap[drag.nodeId];
         if (!node) return;
-        const snapped = snapNodeCentreToGrid({ x: drag.x + point.x - startPoint.x, y: drag.y + point.y - startPoint.y });
-        const candidate = { ...node, ...snapped };
+        const centre = resolveDraggedNodeCentre({ x: drag.x + point.x - startPoint.x, y: drag.y + point.y - startPoint.y }, snapToGrid);
+        const candidate = { ...node, ...centre };
         const routesForCandidate = buildDerivedRoutes(tree, { nodeId: drag.nodeId, x: candidate.x, y: candidate.y });
         const nodeFits = canPlaceNode(candidate, Object.values(tree.nodeMap), tree.root?.id ?? null, drag.nodeId);
         const routeProblem = nodeFits && introducesNewRouteProblems(drag.baselineRoutes, routesForCandidate);
@@ -979,6 +1003,14 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
         <button onClick={() => { setAddNodeMode((mode) => !mode); setConnectMode(false); setConnectSourceId(null); setPlacementPreview(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${addNodeMode ? "border-[#8bb7ff] bg-[#8bb7ff]/15 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#3B82F6]/60 hover:text-white"}`} title="Place one node"><Plus className="h-4 w-4" />{addNodeMode ? "Place node" : "Add node"}</button>
         <button onClick={() => { setConnectMode((mode) => !mode); setAddNodeMode(false); setConnectSourceId(null); setPlacementPreview(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${connectMode ? "border-[#3B82F6] bg-[#3B82F6]/15 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#3B82F6]/60 hover:text-white"}`} title="Connect two nodes"><Link2 className="h-4 w-4" /><span>{connectMode ? (connectSourceId ? "Select target" : "Select source") : "Connect nodes"}</span></button>
         {connectMode && <button onClick={() => { setConnectMode(false); setConnectSourceId(null); }} className="rounded-lg border border-[#2a2a35] bg-[#13131a] p-2 text-[#8a8a95] hover:text-white" title="Cancel connection mode"><MousePointer2 className="h-4 w-4" /></button>}
+        <button
+          onClick={() => setSnapToGrid((enabled) => !enabled)}
+          aria-pressed={snapToGrid}
+          className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${snapToGrid ? "border-[#6f92ff] bg-[#4c7dff]/15 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#9ba3b7] hover:border-[#3B82F6]/60 hover:text-white"}`}
+          title={snapToGrid ? "Grid snap is on — drag to align nodes to dots" : "Grid snap is off — drag nodes freely"}
+        >
+          <Grid3X3 className="h-4 w-4" />Snap {snapToGrid ? "on" : "off"}
+        </button>
         <div className="flex items-center gap-1 rounded-lg border border-[#2a2a35] bg-[#13131a] p-1">
           <button onClick={() => { if (canUndo) dispatch({ type: "UNDO" }); }} disabled={!canUndo} aria-disabled={!canUndo} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white disabled:pointer-events-none disabled:cursor-not-allowed disabled:text-[#4a4a56] disabled:hover:bg-transparent disabled:hover:text-[#4a4a56]" title="Undo"><Undo2 className="h-4 w-4" /></button>
           <button onClick={() => { if (canRedo) dispatch({ type: "REDO" }); }} disabled={!canRedo} aria-disabled={!canRedo} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white disabled:pointer-events-none disabled:cursor-not-allowed disabled:text-[#4a4a56] disabled:hover:bg-transparent disabled:hover:text-[#4a4a56]" title="Redo"><Redo2 className="h-4 w-4" /></button>

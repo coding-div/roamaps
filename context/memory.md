@@ -8,6 +8,14 @@ The user requested a **measurement-only** comparison of a proposed unified invis
 
 ## Current milestone
 
+## Optional snap preference and Home roadmap layouts — implemented 2026-08-21
+
+Grid alignment is now an **optional local editor preference**, not a permanent movement rule. Each tree canvas has a compact `Snap off` / `Snap on` control in the peripheral toolbar. It defaults to off, preserves free-form node movement when off, and persists the choice under `roamaps-snap-to-grid-v1` without altering roadmap, history, or routing data. When enabled, it uses the existing `15 + 30n` grid-intersection alignment before the unchanged collision and route checks.
+
+The Home archive now has an accessible two-choice display switcher. **Box layout** is the default and presents roadmap map sheets; **List layout** uses compact Google Drive-style rows while retaining each roadmap preview, metadata, and open action. The selected layout persists locally under `roamaps-home-layout-v1` and defaults to box when no stored value exists.
+
+Verification passed: `pnpm check`, 22 focused routing assertions, and the production build. Browser checks confirmed the Home box/list switcher, its local persistence, the snap control’s inactive and active labels, and stored values (`snap: true`, `homeLayout: list`) before the test browser was returned to default **Snap off** and **Box layout**. The Home box layout also renders correctly at the 800 × 1280 Android-tablet viewport. The advisory visual review reaffirmed the existing Obsidian Cartography system; its tree-route capture used the hash-router fallback rather than the actual editor view, while direct browser navigation to `/#/tree/1` confirmed the full-canvas editor and its peripheral controls.
+
 ## Snap-to-grid node alignment — implemented 2026-08-21
 
 The user requested snap-to-grid node movement for precise canvas alignment. The live editor now snaps each dragging node centre to the existing visual dot-grid intersections at `15 + 30n` on both axes before its existing node-envelope collision check, derived-route calculation, cleanliness comparison, and commit. This preserves the approved four-screen-pixel drag initiation and 500 ms stationary long-press behavior; it changes only the candidate position being validated.

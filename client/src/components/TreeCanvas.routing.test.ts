@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getNodeBox } from "@/lib/collision";
 import { allTrees, getAllEdges, type NodeData, type TreeMap } from "@/lib/treeData";
-import { buildDerivedRoutes, buildEdgePortPlans, getOrthogonalRoute, snapNodeCentreToGrid } from "./TreeCanvas";
+import { buildDerivedRoutes, buildEdgePortPlans, getOrthogonalRoute, resolveDraggedNodeCentre, snapNodeCentreToGrid } from "./TreeCanvas";
 
 function node(id: string, x: number, y: number): NodeData {
   return { id, x, y, label: "", color: "blue", children: [], popupContent: "" };
@@ -23,6 +23,12 @@ describe("getOrthogonalRoute", () => {
     expect(snapNodeCentreToGrid({ x: 13, y: 31 })).toEqual({ x: 15, y: 45 });
     expect(snapNodeCentreToGrid({ x: -2, y: -31 })).toEqual({ x: -15, y: -45 });
     expect(snapNodeCentreToGrid({ x: 15, y: -15 })).toEqual({ x: 15, y: -15 });
+  });
+
+  it("keeps free-form node movement exact when optional grid snap is off", () => {
+    const point = { x: 13, y: -31 };
+    expect(resolveDraggedNodeCentre(point, false)).toEqual(point);
+    expect(resolveDraggedNodeCentre(point, true)).toEqual({ x: 15, y: -45 });
   });
 
   it("uses a clear boundary lane when a third node blocks a vertical route", () => {
