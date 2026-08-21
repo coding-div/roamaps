@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getNodeBox } from "@/lib/collision";
 import { allTrees, getAllEdges, type NodeData, type TreeMap } from "@/lib/treeData";
-import { buildDerivedRoutes, buildEdgePortPlans, getOrthogonalRoute } from "./TreeCanvas";
+import { buildDerivedRoutes, buildEdgePortPlans, getOrthogonalRoute, snapNodeCentreToGrid } from "./TreeCanvas";
 
 function node(id: string, x: number, y: number): NodeData {
   return { id, x, y, label: "", color: "blue", children: [], popupContent: "" };
@@ -19,6 +19,12 @@ function sharedSidePlans(tree: TreeMap, override: { nodeId: string; x: number; y
 }
 
 describe("getOrthogonalRoute", () => {
+  it("snaps node centres to the visible dot-grid intersections in both coordinate directions", () => {
+    expect(snapNodeCentreToGrid({ x: 13, y: 31 })).toEqual({ x: 15, y: 45 });
+    expect(snapNodeCentreToGrid({ x: -2, y: -31 })).toEqual({ x: -15, y: -45 });
+    expect(snapNodeCentreToGrid({ x: 15, y: -15 })).toEqual({ x: 15, y: -15 });
+  });
+
   it("uses a clear boundary lane when a third node blocks a vertical route", () => {
     const source = { ...node("source", 0, 0), label: "Main Topic" };
     const target = node("target", 0, -180);

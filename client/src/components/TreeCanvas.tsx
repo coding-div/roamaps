@@ -56,6 +56,16 @@ interface DragPreview { nodeId: string; x: number; y: number; valid: boolean; in
 interface PlacementPreview { x: number; y: number; valid: boolean }
 type PanelTarget = { type: "node"; nodeId: string } | { type: "arrow"; sourceId: string; targetId: string };
 
+/**
+ * Obsidian Cartography movement rule: node centres land on the visible dot
+ * intersections (15 + 30n), keeping the map aligned in both coordinate axes.
+ */
+export function snapNodeCentreToGrid(point: Point): Point {
+  const gridOrigin = GRID_SIZE / 2;
+  const snapAxis = (value: number) => Math.round((value - gridOrigin) / GRID_SIZE) * GRID_SIZE + gridOrigin;
+  return { x: snapAxis(point.x), y: snapAxis(point.y) };
+}
+
 function routeKey(sourceId: string, targetId: string): string {
   return `${sourceId}->${targetId}`;
 }
@@ -706,7 +716,8 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       if (point && startPoint) {
         const node = tree.nodeMap[drag.nodeId];
         if (!node) return;
-        const candidate = { ...node, x: drag.x + point.x - startPoint.x, y: drag.y + point.y - startPoint.y };
+        const snapped = snapNodeCentreToGrid({ x: drag.x + point.x - startPoint.x, y: drag.y + point.y - startPoint.y });
+        const candidate = { ...node, ...snapped };
         const routesForCandidate = buildDerivedRoutes(tree, { nodeId: drag.nodeId, x: candidate.x, y: candidate.y });
         const nodeFits = canPlaceNode(candidate, Object.values(tree.nodeMap), tree.root?.id ?? null, drag.nodeId);
         const routeProblem = nodeFits && introducesNewRouteProblems(drag.baselineRoutes, routesForCandidate);

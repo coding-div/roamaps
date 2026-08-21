@@ -8,6 +8,12 @@ The user requested a **measurement-only** comparison of a proposed unified invis
 
 ## Current milestone
 
+## Snap-to-grid node alignment — implemented 2026-08-21
+
+The user requested snap-to-grid node movement for precise canvas alignment. The live editor now snaps each dragging node centre to the existing visual dot-grid intersections at `15 + 30n` on both axes before its existing node-envelope collision check, derived-route calculation, cleanliness comparison, and commit. This preserves the approved four-screen-pixel drag initiation and 500 ms stationary long-press behavior; it changes only the candidate position being validated.
+
+The exported pure helper covers positive, negative, and already-aligned coordinate cases. `pnpm check`, both focused routing suites (22 assertions), and the production build passed. Both Tree 1 and Tree 2 load normally in the live preview after the change. The feature has no new persistence format, history action, router priority, or automatic placement behavior.
+
 ## Eighteen-arrow evenly spaced port benchmark — 2026-08-20
 
 The user requested an isolated performance and route-capacity test before any live editor change: one **normal 100×36 node** connected to eighteen different normal nodes, with seven leaves above, seven below, two left, and two right. Three deterministic cases were measured: all 18 incoming, all 18 outgoing, and a seeded mixed case with 9 incoming and 9 outgoing. Each case was run against the current central midpoint port and an experimental evenly spaced central-port model. The test is diagnostic-only and is not wired to rendering, persistence, history, or the live router.
