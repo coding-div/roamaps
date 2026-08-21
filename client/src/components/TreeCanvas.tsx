@@ -41,6 +41,9 @@ const ROUTE_CLEARANCE = 18;
 const ARROW_LENGTH = 9;
 const ARROW_WIDTH = 5;
 const ARROW_PRESS_MOVE_THRESHOLD = 10;
+// Tablet gesture rule: this is deliberately measured in fixed screen pixels,
+// so zoom cannot make a node feel slow to begin following the finger.
+const NODE_DRAG_START_THRESHOLD = 4;
 const LANE_GAP = 12;
 const PORT_DIRECTIONS: Direction[] = ["up", "left", "down", "right"];
 
@@ -156,7 +159,7 @@ function buildFanoutPlacements(edges: Array<{ source: NodeData; target: NodeData
   return placements;
 }
 
-function buildEdgePortPlans(
+export function buildEdgePortPlans(
   edges: Array<{ source: NodeData; target: NodeData }>,
   boxes: Map<string, Box>,
   fanoutPlacements: Map<string, FanoutPlacement>,
@@ -190,14 +193,21 @@ function buildEdgePortPlans(
   });
   const grouped = new Map<string, PlannedEndpoint[]>();
   for (const endpoint of endpoints) {
-    const groupKey = `${endpoint.node.id}:${endpoint.role}:${endpoint.direction}`;
+    // A physical node side owns one shared allocation pool. Source and target
+    // endpoints remain directed when routing, but must never independently
+    // claim the same side midpoint during a drag.
+    const groupKey = `${endpoint.node.id}:${endpoint.direction}`;
     const group = grouped.get(groupKey) ?? [];
     group.push(endpoint);
     grouped.set(groupKey, group);
   }
   const plans = new Map<string, EdgePortPlan>();
   for (const group of Array.from(grouped.values()) as PlannedEndpoint[][]) {
-    group.sort((a: PlannedEndpoint, b: PlannedEndpoint) => compareAlongSide(a.direction, a.peer, b.peer) || a.key.localeCompare(b.key));
+    group.sort((a: PlannedEndpoint, b: PlannedEndpoint) => (
+      compareAlongSide(a.direction, a.peer, b.peer)
+      || a.key.localeCompare(b.key)
+      || (a.role === b.role ? 0 : a.role === "source" ? -1 : 1)
+    ));
     group.forEach((endpoint: PlannedEndpoint, index: number) => {
       const box = boxes.get(endpoint.node.id)!;
       const port = evenlySpacedPort(endpoint.node, box, endpoint.direction, index, group.length);
@@ -688,7 +698,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== e.pointerId) return;
     const delta = Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY);
-    if (delta > 6) {
+    if (delta > NODE_DRAG_START_THRESHOLD) {
       drag.moved = true;
       endLongPress();
       const point = worldPoint(e.clientX, e.clientY);

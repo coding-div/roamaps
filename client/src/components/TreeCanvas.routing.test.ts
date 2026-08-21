@@ -1,10 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { getNodeBox } from "@/lib/collision";
-import { allTrees, type NodeData, type TreeMap } from "@/lib/treeData";
-import { buildDerivedRoutes, getOrthogonalRoute } from "./TreeCanvas";
+import { allTrees, getAllEdges, type NodeData, type TreeMap } from "@/lib/treeData";
+import { buildDerivedRoutes, buildEdgePortPlans, getOrthogonalRoute } from "./TreeCanvas";
 
 function node(id: string, x: number, y: number): NodeData {
   return { id, x, y, label: "", color: "blue", children: [], popupContent: "" };
+}
+
+function sharedSidePlans(tree: TreeMap, override: { nodeId: string; x: number; y: number }) {
+  const rootId = tree.root?.id ?? null;
+  const positionOf = (current: NodeData): NodeData => current.id === override.nodeId
+    ? { ...current, x: override.x, y: override.y }
+    : current;
+  const positionedNodes = Object.values(tree.nodeMap).map(positionOf);
+  const boxes = new Map(positionedNodes.map((current) => [current.id, getNodeBox(current, current.id === rootId)]));
+  const edges = getAllEdges(tree).map(({ source, target }) => ({ source: positionOf(source), target: positionOf(target) }));
+  return buildEdgePortPlans(edges, boxes, new Map());
 }
 
 describe("getOrthogonalRoute", () => {
@@ -108,7 +119,7 @@ describe("getOrthogonalRoute", () => {
     expect(rightRoute.points[1].x).toBe(rightRoute.points[0].x);
   });
 
-  it("uses the real Tree 2 fan-outs to prefer legal one-bend side pairs", () => {
+  it("keeps the real Tree 2 fan-outs clean and orthogonal after shared-side ports are rebalanced", () => {
     const tree2 = allTrees.find((tree) => tree.id === "tree-2");
     expect(tree2).toBeDefined();
 
@@ -119,9 +130,46 @@ describe("getOrthogonalRoute", () => {
     const leftUpper = routes.get("t2-a2->t2-b4")!;
     const leftLower = routes.get("t2-a2->t2-b5")!;
 
-    expect([upwardCentre, upwardLeft, upwardRight, leftUpper, leftLower].every((route) => route.clean)).toBe(true);
-    expect(upwardCentre.points).toHaveLength(2);
-    expect([upwardLeft, upwardRight, leftUpper, leftLower].every((route) => route.points.length === 3)).toBe(true);
+    const selectedRoutes = [upwardCentre, upwardLeft, upwardRight, leftUpper, leftLower];
+    expect(selectedRoutes.every((route) => route.clean)).toBe(true);
+    for (const route of selectedRoutes) {
+      for (const [index, point] of route.points.slice(1).entries()) {
+        const previous = route.points[index];
+        expect(point.x === previous.x || point.y === previous.y).toBe(true);
+      }
+    }
+  });
+
+  it("allocates Tree 1 incoming and outgoing top-side endpoints together instead of at one midpoint", () => {
+    const tree1 = allTrees.find((tree) => tree.id === "tree-1");
+    expect(tree1).toBeDefined();
+
+    const plans = sharedSidePlans(tree1!, { nodeId: "t1-c1", x: -140, y: 20 });
+    const incoming = plans.get("t1-root->t1-c1")!.targetPorts.find((port) => port.direction === "up")!;
+    const outgoing = plans.get("t1-c1->t1-c4")!.sourcePorts.find((port) => port.direction === "up")!;
+    const secondOutgoing = plans.get("t1-c1->t1-c5")!.sourcePorts.find((port) => port.direction === "up")!;
+
+    expect(incoming.point.y).toBe(2);
+    expect(outgoing.point.y).toBe(2);
+    expect(incoming.point.x).not.toBe(outgoing.point.x);
+    expect([incoming.point.x, outgoing.point.x, secondOutgoing.point.x].sort((a, b) => a - b)).toEqual([-165, -140, -115]);
+  });
+
+  it("allocates Tree 2 shared top-side fan-in and fan-out ports as one evenly spaced pool", () => {
+    const tree2 = allTrees.find((tree) => tree.id === "tree-2");
+    expect(tree2).toBeDefined();
+
+    const plans = sharedSidePlans(tree2!, { nodeId: "t2-a1", x: 0, y: 120 });
+    const endpoints = [
+      plans.get("t2-root->t2-a1")!.targetPorts.find((port) => port.direction === "up")!,
+      plans.get("t2-a1->t2-b1")!.sourcePorts.find((port) => port.direction === "up")!,
+      plans.get("t2-a1->t2-b2")!.sourcePorts.find((port) => port.direction === "up")!,
+      plans.get("t2-a1->t2-b3")!.sourcePorts.find((port) => port.direction === "up")!,
+    ];
+
+    expect(endpoints.every((port) => port.point.y === 102)).toBe(true);
+    expect(new Set(endpoints.map((port) => port.point.x)).size).toBe(4);
+    expect(endpoints.map((port) => port.point.x).sort((a, b) => a - b)).toEqual([-30, -10, 10, 30]);
   });
 
   it("keeps repeated dense Tree 2 route derivation within the interaction budget", () => {
