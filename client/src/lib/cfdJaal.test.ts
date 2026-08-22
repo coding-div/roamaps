@@ -38,6 +38,15 @@ describe("CFD Jaal", () => {
     expect(imported.nodeMap.root.children[0].groupId).toBe("copy-1");
   });
 
+  it("accepts valid CFD Jaal content even when a mobile download has removed its file extension", () => {
+    const extensionlessDownloadText = JSON.stringify(createCfdJaalDocument(tree));
+    expect(getCfdJaalPreview(parseCfdJaal(extensionlessDownloadText))).toMatchObject({ title: "Study plan", nodeCount: 3, arrowCount: 2 });
+  });
+
+  it("still rejects extensionless data that is not a CFD Jaal document", () => {
+    expect(() => parseCfdJaal('{"title":"not a Roadmap"}')).toThrow(CfdJaalValidationError);
+  });
+
   it("rejects unexpected data before it can become a saved Roadmap", () => {
     const raw = createCfdJaalDocument(tree) as unknown as { injected: string };
     raw.injected = "not supported";
