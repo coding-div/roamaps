@@ -13,8 +13,10 @@ import {
   ArrowDownToLine,
   ArrowUpRight,
   Box,
+  CheckCircle2,
   Crown,
   Download,
+  FileJson2,
   FileUp,
   Glasses,
   GitBranch,
@@ -29,7 +31,9 @@ import {
   Plus,
   RotateCcw,
   Settings2,
+  Share2,
   ShieldCheck,
+  Smartphone,
   Sparkles,
   Trash2,
   UserRound,
@@ -85,6 +89,12 @@ const PROFILE_STORAGE_KEY = "roamaps-local-profile-v1";
 type HomeLayout = "box" | "list";
 type SheetPanel = "menu" | "profile" | "settings" | "bin" | "guide";
 type AvatarId = "sunglasses" | "robot" | "mage" | "crown" | "mark" | "man" | "woman" | "apple" | "hat" | "globe";
+
+const SHARE_GUIDE_STEPS = [
+  { title: "Open Files", detail: "Find the CFD Jaal (.cfdj) file on your Android device.", Icon: FileJson2 },
+  { title: "Tap Share → Roamaps", detail: "Choose Share, then select the installed Roamaps app.", Icon: Share2 },
+  { title: "Check and add", detail: "Read the safety preview, then add it as a separate Roadmap.", Icon: ShieldCheck },
+] as const;
 
 interface LocalProfile {
   name: string;
@@ -202,6 +212,7 @@ export default function Home() {
   const [renameDraft, setRenameDraft] = useState("");
   const [pendingImport, setPendingImport] = useState<{ document: CfdJaalDocument; preview: CfdJaalPreview } | null>(null);
   const [confirming, setConfirming] = useState<{ type: "delete"; tree: TreeMap } | { type: "empty" } | null>(null);
+  const [shareGuideStep, setShareGuideStep] = useState(0);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setVisible(true), 50);
@@ -237,6 +248,12 @@ export default function Home() {
       }
     })();
   }, []);
+
+  useEffect(() => {
+    if (!sheetOpen || sheetPanel !== "guide" || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const timer = window.setInterval(() => setShareGuideStep((step) => (step + 1) % SHARE_GUIDE_STEPS.length), 1900);
+    return () => window.clearInterval(timer);
+  }, [sheetOpen, sheetPanel]);
 
   function openSheet(panel: SheetPanel) {
     if (panel === "profile") setProfileDraft(profile);
@@ -313,6 +330,23 @@ export default function Home() {
     if (sheetPanel === "guide") return <>
       <button onClick={() => setSheetPanel("menu")} className="mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-[#7686b8] transition-colors hover:text-white">← Menu</button>
       <h2 className="font-['Space_Grotesk',sans-serif] text-xl font-medium text-[#eef2ff]">Useful features</h2><p className="text-sm leading-6 text-[#7a849d]">What each Roamaps tool is for, and when it helps.</p>
+      <section className="mt-6 border border-[#314a85]/70 bg-[#0b101d] p-3.5" aria-labelledby="android-share-demo-title">
+        <div className="flex items-start justify-between gap-3"><div><p className="font-mono text-[9px] uppercase tracking-[0.2em] text-[#87a5ff]">Android / short visual demo</p><h3 id="android-share-demo-title" className="mt-1 font-['Space_Grotesk',sans-serif] text-base font-medium text-[#edf2ff]">Share a CFD Jaal to Roamaps</h3></div><Smartphone className="mt-0.5 h-5 w-5 shrink-0 text-[#7394f1]" /></div>
+        <div className="relative mt-4 overflow-hidden border border-[#253354] bg-[#080b12] p-2.5">
+          <div aria-hidden="true" className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#7c9dff] to-transparent opacity-70" />
+          <div className="grid gap-2" role="tablist" aria-label="Android sharing steps">
+            {SHARE_GUIDE_STEPS.map(({ title, detail, Icon }, index) => {
+              const active = shareGuideStep === index;
+              return <button key={title} type="button" role="tab" aria-selected={active} onClick={() => setShareGuideStep(index)} className={`group relative flex w-full items-center gap-3 overflow-hidden border px-2.5 py-2.5 text-left transition-all duration-300 motion-reduce:transition-none ${active ? "border-[#668afd] bg-[#152652] shadow-[inset_3px_0_0_#668afd]" : "border-[#20293d] bg-[#0d111a] hover:border-[#435985]"}`}>
+                <span aria-hidden="true" className={`flex h-7 w-7 shrink-0 items-center justify-center border transition-colors duration-300 motion-reduce:transition-none ${active ? "border-[#8aa8ff] bg-[#527dff] text-white" : "border-[#394865] bg-[#111a2b] text-[#7182a7]"}`}><Icon className="h-3.5 w-3.5" /></span>
+                <span className="min-w-0 flex-1"><span className={`block font-mono text-[9px] uppercase tracking-[0.16em] ${active ? "text-[#b7c9ff]" : "text-[#6f7b94]"}`}>{String(index + 1).padStart(2, "0")} / {title}</span><span className={`mt-0.5 block text-[11px] leading-4 ${active ? "text-[#d7e1ff]" : "text-[#7c879c]"}`}>{detail}</span></span>
+                {active && <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 bg-[#90abff] shadow-[0_0_12px_3px_rgba(111,146,255,0.55)]" />}
+              </button>;
+            })}
+          </div>
+          <div className="mt-3 flex items-center justify-between gap-3 border-t border-[#1d2740] pt-2.5"><p className="text-[10px] leading-4 text-[#7d8ba8]">Install Roamaps once. The file stays on your device until you approve the import.</p><div className="flex shrink-0 gap-1" aria-hidden="true">{SHARE_GUIDE_STEPS.map((step, index) => <span key={step.title} className={`h-1 w-4 transition-colors duration-300 motion-reduce:transition-none ${shareGuideStep === index ? "bg-[#7c9dff]" : "bg-[#2a3550]"}`} />)}</div></div>
+        </div>
+      </section>
       <div className="mt-6 space-y-3">{[
         ["01", "Build a map", "Tap empty canvas to add a node. Drag it to place the idea; Connect adds one safe directional arrow between two nodes."],
         ["02", "Use long press", "Long-press a node for label editing, full notes, colour, Teleport, and removal. Long-press an arrow for its own tools."],
