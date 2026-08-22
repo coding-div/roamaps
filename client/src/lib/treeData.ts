@@ -111,7 +111,7 @@ export function getAllNodes(tree: TreeMap): NodeData[] {
   return Object.values(tree.nodeMap);
 }
 
-// Tree 1: Small tree — 3 levels deep
+// Built-in archive map 01: a compact learning-route example.
 export const tree1: TreeMap = (() => {
   const root: NodeData = {
     id: "t1-root",
@@ -209,15 +209,15 @@ export const tree1: TreeMap = (() => {
 
   return {
     id: "tree-1",
-    title: "Tree 1",
-    description: "Small tree — up to 3 levels",
+    title: "Learning Route",
+    description: "A compact map for a focused subject",
     root,
     nodeMap,
     maxDepth: 3,
   };
 })();
 
-// Tree 2: Big tree — up to 8 levels deep
+// Built-in archive map 02: a denser systems-route example.
 export const tree2: TreeMap = (() => {
   const root: NodeData = {
     id: "t2-root",
@@ -405,8 +405,8 @@ export const tree2: TreeMap = (() => {
 
   return {
     id: "tree-2",
-    title: "Tree 2",
-    description: "Big tree — up to 8 levels",
+    title: "Systems Atlas",
+    description: "A deeper map for connected systems",
     root,
     nodeMap,
     maxDepth: 8,

@@ -70,3 +70,6 @@ The mark is a compact three-node route glyph: two cobalt points offset around a 
 - The local-first model remains the product truth: users can build immediately without login, and changes remain stored in their browser.
 - The Roamaps identity remains a route-glyph-plus-custom-tight wordmark lockup; it must feel like a map instrument label rather than a default text logo.
 - The editor must retain a visible cartographic structure layer—fine coordinate grid, node topology, route lines, or the status rail—even when the map is otherwise sparse.
+- Roadmap examples use calm, real-feeling learning-map and route-archive names rather than placeholder tree labels.
+- The Home archive is visually connected to the hero through a restrained route trace and archive junction, so the page reads as one continuous cartographic workspace.
+- Route Cobalt remains reserved for active route markers, selected states, primary actions, and key junctions; it is not general decoration.

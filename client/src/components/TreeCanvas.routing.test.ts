@@ -234,6 +234,96 @@ describe("getOrthogonalRoute", () => {
     expect(routes[1].groupId).toBe("copy-1");
   });
 
+  it("uses one vertical departure trunk when Head-copy destinations are both above their source", () => {
+    const source = {
+      ...node("source", 0, 0),
+      children: [
+        { targetId: "upperLeft", color: "blue" as const, groupId: "copy-up" },
+        { targetId: "upperRight", color: "red" as const, groupId: "copy-up" },
+      ],
+    };
+    const upperLeft = node("upperLeft", -260, -220);
+    const upperRight = node("upperRight", 260, -220);
+    const tree: TreeMap = { id: "copy-up-trunk", title: "Copy", description: "", root: source, nodeMap: { source, upperLeft, upperRight }, maxDepth: 1 };
+    const routes = buildDerivedRoutes(tree).map(({ route }) => route);
+
+    expect(routes.every((route) => route.clean)).toBe(true);
+    expect(routes[0].points[0]).toEqual(routes[1].points[0]);
+    expect(routes[0].points[1]).toEqual(routes[1].points[1]);
+    expect(routes[0].points[1].y).toBeLessThan(routes[0].points[0].y);
+  });
+
+  it("uses one horizontal departure trunk when Head-copy destinations are both right of their source", () => {
+    const source = {
+      ...node("source", 0, 0),
+      children: [
+        { targetId: "rightUpper", color: "blue" as const, groupId: "copy-right" },
+        { targetId: "rightLower", color: "red" as const, groupId: "copy-right" },
+      ],
+    };
+    const rightUpper = node("rightUpper", 280, -150);
+    const rightLower = node("rightLower", 280, 150);
+    const tree: TreeMap = { id: "copy-right-trunk", title: "Copy", description: "", root: source, nodeMap: { source, rightUpper, rightLower }, maxDepth: 1 };
+    const routes = buildDerivedRoutes(tree).map(({ route }) => route);
+
+    expect(routes.every((route) => route.clean)).toBe(true);
+    expect(routes[0].points[0]).toEqual(routes[1].points[0]);
+    expect(routes[0].points[1]).toEqual(routes[1].points[1]);
+    expect(routes[0].points[1].x).toBeGreaterThan(routes[0].points[0].x);
+  });
+
+  it("uses one shared target-side trunk for Tail copies whose sources are both above the destination", () => {
+    const root = node("root", -900, 900);
+    const upperLeft = {
+      ...node("upper-left", -220, -240),
+      children: [{ targetId: "target", color: "blue" as const, groupId: "copy-target-up" }],
+    };
+    const upperRight = {
+      ...node("upper-right", 220, -240),
+      children: [{ targetId: "target", color: "red" as const, groupId: "copy-target-up" }],
+    };
+    const target = node("target", 0, 0);
+    const tree: TreeMap = { id: "copy-target-trunk", title: "Copy", description: "", root, nodeMap: { root, upperLeft, upperRight, target }, maxDepth: 1 };
+    const routes = buildDerivedRoutes(tree).map(({ route }) => route);
+
+    expect(routes.every((route) => route.clean)).toBe(true);
+    expect(routes[0].points.at(-1)).toEqual(routes[1].points.at(-1));
+    expect(routes[0].points.at(-2)).toEqual(routes[1].points.at(-2));
+    expect(routes[0].points.at(-2)!.y).toBeLessThan(routes[0].points.at(-1)!.y);
+  });
+
+  it("prefers the shorter shared trunk when equally good diagonal copy directions are available", () => {
+    const source = {
+      ...node("source", 0, 0),
+      children: [
+        { targetId: "upperRightWide", color: "blue" as const, groupId: "copy-diagonal" },
+        { targetId: "upperRightTall", color: "red" as const, groupId: "copy-diagonal" },
+      ],
+    };
+    // Both targets are above-right. A right or an up trunk gives the same
+    // bends and total route length; the right trunk is shorter.
+    const upperRightWide = node("upperRightWide", 300, -180);
+    const upperRightTall = node("upperRightTall", 180, -300);
+    const tree: TreeMap = { id: "copy-diagonal-trunk", title: "Copy", description: "", root: source, nodeMap: { source, upperRightWide, upperRightTall }, maxDepth: 1 };
+    const routes = buildDerivedRoutes(tree).map(({ route }) => route);
+
+    expect(routes.every((route) => route.clean)).toBe(true);
+    expect(routes[0].points[0]).toEqual(routes[1].points[0]);
+    // The wider branch continues horizontally after the shorter branch splits.
+    // Their collinear first segments still overlap from their shared port to
+    // x=180, so rendering extracts a 100-unit rightward trunk from the
+    // root's wider right-side port.
+    expect(routes[0].points[1].y).toBe(routes[0].points[0].y);
+    expect(routes[1].points[1].y).toBe(routes[1].points[0].y);
+    expect(routes[0].points[1].x).toBeGreaterThan(routes[0].points[0].x);
+    expect(routes[1].points[1].x).toBeGreaterThan(routes[1].points[0].x);
+    const sharedTrunk = Math.min(
+      Math.abs(routes[0].points[1].x - routes[0].points[0].x),
+      Math.abs(routes[1].points[1].x - routes[1].points[0].x),
+    );
+    expect(sharedTrunk).toBe(100);
+  });
+
   it("lets a copy group separate when its members no longer share a physical port", () => {
     const source = {
       ...node("source", 0, 0),

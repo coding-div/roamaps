@@ -165,6 +165,127 @@ interface PlannedEndpoint {
   direction: Direction;
 }
 interface FanoutPlacement { groupKey: string; direction: Direction; index: number; total: number }
+interface CopyEndpointMember { source: NodeData; target: NodeData }
+interface CopyEndpointGroup {
+  groupId: string;
+  role: "source" | "target";
+  node: NodeData;
+  members: CopyEndpointMember[];
+}
+
+function copyEndpointKey(groupId: string, role: "source" | "target", nodeId: string): string {
+  return `${groupId}:${role}:${nodeId}`;
+}
+
+function relativeDirections(from: NodeData, to: NodeData): Direction[] {
+  const directions: Direction[] = [];
+  if (to.x < from.x) directions.push("left");
+  if (to.x > from.x) directions.push("right");
+  if (to.y < from.y) directions.push("up");
+  if (to.y > from.y) directions.push("down");
+  return directions;
+}
+
+function routeBends(route: Route): number {
+  return Math.max(0, route.points.length - 2);
+}
+
+function routeLength(route: Route): number {
+  return toSegments(route.points).reduce((total, segment) => total + Math.abs(segment.b.x - segment.a.x) + Math.abs(segment.b.y - segment.a.y), 0);
+}
+
+/**
+ * Copy routes use their actual common initial/final segment as the final
+ * tie-breaker. A smaller value means that two otherwise equal diagonal plans
+ * separate earlier, as approved for the two-common-side case.
+ */
+function sharedEndpointTrunkLength(routes: Route[], role: "source" | "target"): number {
+  if (routes.length < 2 || routes.some((route) => route.points.length < 2)) return 0;
+  const reference = role === "source"
+    ? { a: routes[0].points[0], b: routes[0].points[1] }
+    : { a: routes[0].points[routes[0].points.length - 1], b: routes[0].points[routes[0].points.length - 2] };
+  const referenceHorizontal = reference.a.y === reference.b.y;
+  const referenceSign = referenceHorizontal ? Math.sign(reference.b.x - reference.a.x) : Math.sign(reference.b.y - reference.a.y);
+  let sharedLength = Math.abs(reference.b.x - reference.a.x) + Math.abs(reference.b.y - reference.a.y);
+  for (const route of routes.slice(1)) {
+    const segment = role === "source"
+      ? { a: route.points[0], b: route.points[1] }
+      : { a: route.points[route.points.length - 1], b: route.points[route.points.length - 2] };
+    const horizontal = segment.a.y === segment.b.y;
+    const sign = horizontal ? Math.sign(segment.b.x - segment.a.x) : Math.sign(segment.b.y - segment.a.y);
+    if (!pointEquals(reference.a, segment.a) || horizontal !== referenceHorizontal || sign !== referenceSign) return 0;
+    sharedLength = Math.min(sharedLength, Math.abs(segment.b.x - segment.a.x) + Math.abs(segment.b.y - segment.a.y));
+  }
+  return sharedLength;
+}
+
+/**
+ * A copy family has a common endpoint only when at least two of its members
+ * meet the same node. We score every side that all peer nodes share relative
+ * to that endpoint. This keeps copy sharing below legal routing, bend count,
+ * and total path length, while using the shorter trunk only for an otherwise
+ * equal diagonal choice.
+ */
+function buildCopyEndpointDirections(
+  edges: Array<{ source: NodeData; target: NodeData; groupId?: string }>,
+  displayNodes: NodeData[],
+  boxes: Map<string, Box>,
+): Map<string, Direction> {
+  const groups = new Map<string, CopyEndpointGroup>();
+  for (const edge of edges) {
+    if (!edge.groupId) continue;
+    for (const role of ["source", "target"] as const) {
+      const node = role === "source" ? edge.source : edge.target;
+      const key = copyEndpointKey(edge.groupId, role, node.id);
+      const group = groups.get(key) ?? { groupId: edge.groupId, role, node, members: [] };
+      group.members.push({ source: edge.source, target: edge.target });
+      groups.set(key, group);
+    }
+  }
+
+  const preferences = new Map<string, Direction>();
+  for (const [key, group] of Array.from(groups.entries())) {
+    if (group.members.length < 2) continue;
+    const commonDirections = PORT_DIRECTIONS.filter((direction: Direction) => group.members.every(({ source, target }: CopyEndpointMember) => {
+      const peer = group.role === "source" ? target : source;
+      return relativeDirections(group.node, peer).includes(direction);
+    }));
+    if (!commonDirections.length) continue;
+
+    const candidates: Array<{ direction: Direction; routeErrors: number; bends: number; length: number; trunk: number }> = commonDirections.map((direction: Direction) => {
+      const routes: Route[] = group.members.map(({ source, target }: CopyEndpointMember) => {
+        const sourceBox = boxes.get(source.id)!;
+        const targetBox = boxes.get(target.id)!;
+        const obstacles = displayNodes
+          .filter((node) => node.id !== source.id && node.id !== target.id)
+          .map((node) => boxes.get(node.id)!);
+        const sourcePorts = group.role === "source"
+          ? [midpointPort(source, sourceBox, direction)]
+          : PORT_DIRECTIONS.map((candidate) => midpointPort(source, sourceBox, candidate));
+        const targetPorts = group.role === "target"
+          ? [midpointPort(target, targetBox, direction)]
+          : PORT_DIRECTIONS.map((candidate) => midpointPort(target, targetBox, candidate));
+        return getOrthogonalRoute(source, target, sourceBox, targetBox, obstacles, [], { sourcePorts, targetPorts });
+      });
+      return {
+        direction,
+        routeErrors: routes.filter((route: Route) => !route.clean).length,
+        bends: routes.reduce((total: number, route: Route) => total + routeBends(route), 0),
+        length: routes.reduce((total: number, route: Route) => total + routeLength(route), 0),
+        trunk: sharedEndpointTrunkLength(routes, group.role),
+      };
+    });
+    candidates.sort((left, right) => (
+      left.routeErrors - right.routeErrors
+      || left.bends - right.bends
+      || left.length - right.length
+      || left.trunk - right.trunk
+      || PORT_DIRECTIONS.indexOf(left.direction) - PORT_DIRECTIONS.indexOf(right.direction)
+    ));
+    preferences.set(key, candidates[0].direction);
+  }
+  return preferences;
+}
 
 function compareAlongSide(direction: Direction, a: NodeData, b: NodeData): number {
   const primary = direction === "up" || direction === "down" ? a.x - b.x : a.y - b.y;
@@ -202,8 +323,9 @@ export function buildEdgePortPlans(
   edges: Array<{ source: NodeData; target: NodeData; groupId?: string }>,
   boxes: Map<string, Box>,
   fanoutPlacements: Map<string, FanoutPlacement>,
+  copyEndpointDirections: Map<string, Direction> = new Map(),
 ): Map<string, EdgePortPlan> {
-  const endpoints: PlannedEndpoint[] = edges.flatMap(({ source, target }) => {
+  const endpoints: PlannedEndpoint[] = edges.flatMap(({ source, target, groupId }) => {
     const key = routeKey(source.id, target.id);
     const fanout = fanoutPlacements.get(key);
     // Obsidian Cartography routing: every edge first exits the source through
@@ -211,8 +333,10 @@ export function buildEdgePortPlans(
     // preserves the approved node → closest-side → position priority while
     // retaining adjacent-side one-bend routes without multiplying each dense
     // Tree 2 search by four. A fan-out still uses its shared facing source side.
-    const sourceDirections = [fanout?.direction ?? directionTowards(source, target)];
-    const targetDirections = PORT_DIRECTIONS;
+    const sourceCopyDirection = groupId ? copyEndpointDirections.get(copyEndpointKey(groupId, "source", source.id)) : undefined;
+    const targetCopyDirection = groupId ? copyEndpointDirections.get(copyEndpointKey(groupId, "target", target.id)) : undefined;
+    const sourceDirections = [sourceCopyDirection ?? fanout?.direction ?? directionTowards(source, target)];
+    const targetDirections = targetCopyDirection ? [targetCopyDirection] : PORT_DIRECTIONS;
     return [
       ...sourceDirections.map((direction) => ({
         key,
@@ -613,7 +737,8 @@ export function buildDerivedRoutes(
   const orderedEdges = [...edges].sort((a, b) => `${a.source.id}->${a.target.id}`.localeCompare(`${b.source.id}->${b.target.id}`));
   const positionedEdges = orderedEdges.map(({ source, target, groupId }) => ({ source: positionOf(source), target: positionOf(target), groupId }));
   const fanoutPlacements = buildFanoutPlacements(positionedEdges);
-  const portPlans = buildEdgePortPlans(positionedEdges, boxes, fanoutPlacements);
+  const copyEndpointDirections = buildCopyEndpointDirections(positionedEdges, displayNodes, boxes);
+  const portPlans = buildEdgePortPlans(positionedEdges, boxes, fanoutPlacements, copyEndpointDirections);
   const reservationEdges = [...positionedEdges].sort((a, b) => {
     const comparison = compareFanoutReservation(a, b, fanoutPlacements);
     return reservationOrder === "reversed" ? -comparison : comparison;
