@@ -25,10 +25,9 @@ import {
 import { useRoadmaps } from "@/contexts/RoadmapContext";
 import { findProgressivePrototypeRoute, PrototypeLaneIndex, type PrototypeNode, type PrototypePort, type PrototypeSegment } from "@/lib/progressiveRouter";
 import { toast } from "sonner";
-import { Grid3X3, Home, Link2, Minus, MousePointer2, Plus, Redo2, RotateCcw, Undo2, WandSparkles } from "lucide-react";
+import { Grid3X3, Home, Link2, Minus, MousePointer2, Plus, Redo2, RotateCcw, Undo2 } from "lucide-react";
 import ActionPanel from "./ActionPanel";
 import NodePopup from "./NodePopup";
-import { Spinner } from "./ui/spinner";
 
 interface TreeCanvasProps {
   tree: TreeMap;
@@ -57,6 +56,9 @@ interface ArrowPressState { pointerId: number; startX: number; startY: number }
 interface DragPreview { nodeId: string; x: number; y: number; valid: boolean; invalidReason: "node-overlap" | "route-lane" | null; routes: DerivedRoute[] }
 interface PlacementPreview { x: number; y: number; valid: boolean }
 type PanelTarget = { type: "node"; nodeId: string } | { type: "arrow"; sourceId: string; targetId: string };
+interface TeleportMode { nodeId: string; baselineRoutes: Map<string, Route> }
+interface CopyArrowMode { sourceId: string; targetId: string; copyMode: "head" | "tail"; groupId: string }
+interface CopyRenderGeometry { visibleSegmentsByKey: Map<string, Segment[]>; selectableSegmentsByKey: Map<string, Segment[]>; sharedSegmentsByKey: Map<string, Segment[]> }
 
 /**
  * Obsidian Cartography movement rule: node centres land on the visible dot
@@ -85,6 +87,23 @@ function introducesNewRouteProblems(baselineRoutes: Map<string, Route>, candidat
     const previous = baselineRoutes.get(routeKey(source.id, target.id));
     return Boolean(previous?.clean && !route.clean);
   });
+}
+
+/** Teleport uses the same placement and clean-route rules as a completed drag. */
+export function validateTeleportDestination(
+  tree: TreeMap,
+  nodeId: string,
+  point: Point,
+  baselineRoutes: Map<string, Route> = new Map(buildDerivedRoutes(tree).map(({ source, target, route }) => [routeKey(source.id, target.id), route])),
+): { valid: boolean; reason: "node-overlap" | "route-lane" | "missing-node" | null } {
+  const node = tree.nodeMap[nodeId];
+  if (!node) return { valid: false, reason: "missing-node" };
+  const candidate = { ...node, x: point.x, y: point.y };
+  if (!canPlaceNode(candidate, Object.values(tree.nodeMap), tree.root?.id ?? null, nodeId)) return { valid: false, reason: "node-overlap" };
+  const routesForCandidate = buildDerivedRoutes(tree, { nodeId, x: point.x, y: point.y });
+  return introducesNewRouteProblems(baselineRoutes, routesForCandidate)
+    ? { valid: false, reason: "route-lane" }
+    : { valid: true, reason: null };
 }
 
 function DotGrid() {
@@ -180,7 +199,7 @@ function buildFanoutPlacements(edges: Array<{ source: NodeData; target: NodeData
 }
 
 export function buildEdgePortPlans(
-  edges: Array<{ source: NodeData; target: NodeData }>,
+  edges: Array<{ source: NodeData; target: NodeData; groupId?: string }>,
   boxes: Map<string, Box>,
   fanoutPlacements: Map<string, FanoutPlacement>,
 ): Map<string, EdgePortPlan> {
@@ -239,6 +258,26 @@ export function buildEdgePortPlans(
   for (const plan of Array.from(plans.values())) {
     plan.sourcePorts.sort((a: PrototypePort, b: PrototypePort) => PORT_DIRECTIONS.indexOf(a.direction) - PORT_DIRECTIONS.indexOf(b.direction));
     plan.targetPorts.sort((a: PrototypePort, b: PrototypePort) => PORT_DIRECTIONS.indexOf(a.direction) - PORT_DIRECTIONS.indexOf(b.direction));
+  }
+  // A copy group is an equal-member family, not an original plus aliases. If
+  // two members meet the same node on the same side, the first reservation owns
+  // that physical port and later members reuse it. Different sides stay free
+  // to separate naturally when the map geometry changes.
+  const sharedGroupPorts = new Map<string, PrototypePort>();
+  for (const edge of edges) {
+    if (!edge.groupId) continue;
+    const plan = plans.get(routeKey(edge.source.id, edge.target.id));
+    if (!plan) continue;
+    for (const [role, node] of [["source", edge.source], ["target", edge.target]] as const) {
+      const property = role === "source" ? "sourcePorts" : "targetPorts";
+      plan[property] = plan[property].map((port) => {
+        const key = `${edge.groupId}:${role}:${node.id}:${port.direction}`;
+        const firstReserved = sharedGroupPorts.get(key);
+        if (firstReserved) return firstReserved;
+        sharedGroupPorts.set(key, port);
+        return port;
+      });
+    }
   }
   return plans;
 }
@@ -403,6 +442,72 @@ function toSegments(points: Point[]): Segment[] {
   return points.slice(1).map((point, index) => ({ a: points[index], b: point }));
 }
 
+function pointEquals(a: Point, b: Point): boolean {
+  return a.x === b.x && a.y === b.y;
+}
+
+function segmentsAreCollinear(a: Segment, b: Segment): boolean {
+  return isHorizontal(a) === isHorizontal(b) && (isHorizontal(a) ? a.a.y === b.a.y : a.a.x === b.a.x);
+}
+
+function subtractCollinearOverlaps(segment: Segment, obstacles: Segment[]): Segment[] {
+  const horizontal = isHorizontal(segment);
+  const start = horizontal ? segment.a.x : segment.a.y;
+  const end = horizontal ? segment.b.x : segment.b.y;
+  const low = Math.min(start, end);
+  const high = Math.max(start, end);
+  const cuts = obstacles
+    .filter((obstacle) => segmentsAreCollinear(segment, obstacle))
+    .map((obstacle) => ({
+      start: Math.max(low, Math.min(horizontal ? obstacle.a.x : obstacle.a.y, horizontal ? obstacle.b.x : obstacle.b.y)),
+      end: Math.min(high, Math.max(horizontal ? obstacle.a.x : obstacle.a.y, horizontal ? obstacle.b.x : obstacle.b.y)),
+    }))
+    .filter((cut) => cut.end > cut.start)
+    .sort((a, b) => a.start - b.start);
+  if (!cuts.length) return [segment];
+
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const cut of cuts) {
+    const previous = merged[merged.length - 1];
+    if (previous && cut.start <= previous.end) previous.end = Math.max(previous.end, cut.end);
+    else merged.push({ ...cut });
+  }
+  const toPoint = (value: number): Point => horizontal ? { x: value, y: segment.a.y } : { x: segment.a.x, y: value };
+  const pieces: Segment[] = [];
+  let cursor = low;
+  for (const cut of merged) {
+    if (cut.start > cursor) pieces.push({ a: toPoint(cursor), b: toPoint(cut.start) });
+    cursor = Math.max(cursor, cut.end);
+  }
+  if (cursor < high) pieces.push({ a: toPoint(cursor), b: toPoint(high) });
+  return start <= end ? pieces : pieces.map((piece) => ({ a: piece.b, b: piece.a })).reverse();
+}
+
+function collinearOverlaps(segment: Segment, obstacles: Segment[]): Segment[] {
+  const horizontal = isHorizontal(segment);
+  const segmentStart = horizontal ? segment.a.x : segment.a.y;
+  const segmentEnd = horizontal ? segment.b.x : segment.b.y;
+  const low = Math.min(segmentStart, segmentEnd);
+  const high = Math.max(segmentStart, segmentEnd);
+  return obstacles
+    .filter((obstacle) => segmentsAreCollinear(segment, obstacle))
+    .map((obstacle) => {
+      const obstacleStart = horizontal ? obstacle.a.x : obstacle.a.y;
+      const obstacleEnd = horizontal ? obstacle.b.x : obstacle.b.y;
+      const start = Math.max(low, Math.min(obstacleStart, obstacleEnd));
+      const end = Math.min(high, Math.max(obstacleStart, obstacleEnd));
+      if (end <= start) return null;
+      return horizontal
+        ? { a: { x: start, y: segment.a.y }, b: { x: end, y: segment.a.y } }
+        : { a: { x: segment.a.x, y: start }, b: { x: segment.a.x, y: end } };
+    })
+    .filter((item): item is Segment => Boolean(item));
+}
+
+function pathFromSegment(segment: Segment): string {
+  return `M ${segment.a.x} ${segment.a.y} L ${segment.b.x} ${segment.b.y}`;
+}
+
 function nearestPointOnRoute(point: Point, route: Route): { point: Point; segmentLength: number; distance: number; segment: Segment } | null {
   let best: { point: Point; segmentLength: number; distance: number; segment: Segment } | null = null;
   for (const segment of toSegments(route.points)) {
@@ -467,6 +572,8 @@ export interface DerivedRoute {
   target: NodeData;
   sourceNode: NodeData;
   targetNode: NodeData;
+  groupId?: string;
+  reservationIndex: number;
   route: Route;
 }
 
@@ -504,27 +611,31 @@ export function buildDerivedRoutes(
   const displayNodes = nodes.map(positionOf);
   const boxes = new Map(displayNodes.map((node) => [node.id, getNodeBox(node, node.id === rootId)]));
   const orderedEdges = [...edges].sort((a, b) => `${a.source.id}->${a.target.id}`.localeCompare(`${b.source.id}->${b.target.id}`));
-  const positionedEdges = orderedEdges.map(({ source, target }) => ({ source: positionOf(source), target: positionOf(target) }));
+  const positionedEdges = orderedEdges.map(({ source, target, groupId }) => ({ source: positionOf(source), target: positionOf(target), groupId }));
   const fanoutPlacements = buildFanoutPlacements(positionedEdges);
   const portPlans = buildEdgePortPlans(positionedEdges, boxes, fanoutPlacements);
   const reservationEdges = [...positionedEdges].sort((a, b) => {
     const comparison = compareFanoutReservation(a, b, fanoutPlacements);
     return reservationOrder === "reversed" ? -comparison : comparison;
   });
-  const reservedRoutes: Array<{ key: string; segments: Segment[] }> = [];
+  const reservedRoutes: Array<{ key: string; segments: Segment[]; groupId?: string }> = [];
   const reservedLaneIndex = new PrototypeLaneIndex();
   const routesByKey = new Map<string, DerivedRoute>();
-  for (const { source: sourceNode, target: targetNode } of reservationEdges) {
+  for (const [reservationIndex, { source: sourceNode, target: targetNode, groupId }] of Array.from(reservationEdges.entries())) {
     const sourceBox = boxes.get(sourceNode.id)!;
     const targetBox = boxes.get(targetNode.id)!;
     const obstacleBoxes = displayNodes.filter((node) => node.id !== sourceNode.id && node.id !== targetNode.id).map((node) => boxes.get(node.id)!);
     const reverseKey = `${targetNode.id}->${sourceNode.id}`;
     const reverseReservation = reservedRoutes.find((entry) => entry.key === reverseKey);
-    // A reverse pair remains exempt from its own lane comparison. Only that
-    // uncommon case needs a temporary exact index; all ordinary edges share
-    // the accumulating index instead of rebuilding a flat obstacle list.
-    const arrowObstacles = reverseReservation ? reservedRoutes.filter((entry) => entry.key !== reverseKey).flatMap((entry) => entry.segments) : [];
-    const arrowLaneIndex = reverseReservation ? new PrototypeLaneIndex(arrowObstacles) : reservedLaneIndex;
+    // Reverse edges remain mutually exempt. Copy-group members are also
+    // exempt so compatible members can keep one shared physical trunk.
+    const needsFilteredReservations = Boolean(reverseReservation || groupId);
+    const arrowObstacles = needsFilteredReservations
+      ? reservedRoutes
+        .filter((entry) => entry.key !== reverseKey && (!groupId || entry.groupId !== groupId))
+        .flatMap((entry) => entry.segments)
+      : [];
+    const arrowLaneIndex = needsFilteredReservations ? new PrototypeLaneIndex(arrowObstacles) : reservedLaneIndex;
     const routeStartedAt = routeTimings ? performance.now() : 0;
     const baseRoute = getOrthogonalRoute(sourceNode, targetNode, sourceBox, targetBox, obstacleBoxes, arrowObstacles, portPlans.get(routeKey(sourceNode.id, targetNode.id)), arrowLaneIndex);
     const laneRoute = baseRoute.points.length < 2
@@ -534,26 +645,13 @@ export function buildDerivedRoutes(
     const route = clean === laneRoute.clean ? laneRoute : { ...laneRoute, clean };
     if (route.points.length >= 2) {
       const segments = toSegments(route.points);
-      reservedRoutes.push({ key: routeKey(sourceNode.id, targetNode.id), segments });
+      reservedRoutes.push({ key: routeKey(sourceNode.id, targetNode.id), segments, groupId });
       segments.forEach((segment) => reservedLaneIndex.add(segment));
     }
     if (routeTimings) routeTimings.push(performance.now() - routeStartedAt);
-    routesByKey.set(routeKey(sourceNode.id, targetNode.id), { source: sourceNode, target: targetNode, sourceNode, targetNode, route });
+    routesByKey.set(routeKey(sourceNode.id, targetNode.id), { source: sourceNode, target: targetNode, sourceNode, targetNode, groupId, reservationIndex, route });
   }
   return orderedEdges.map(({ source, target }) => routesByKey.get(routeKey(source.id, target.id))!);
-}
-
-/**
- * All Set evaluates two deterministic whole-map reservation passes. It never
- * edits the roadmap: errors win first, then fewer bends, then shorter total
- * arrow length. The existing plan wins exact ties, preventing visual churn.
- */
-export function buildAllSetRoutes(tree: TreeMap): DerivedRoute[] {
-  const currentPlan = buildDerivedRoutes(tree);
-  const alternatePlan = buildDerivedRoutes(tree, undefined, undefined, "reversed");
-  return compareRouteRefreshScores(getRouteRefreshScore(alternatePlan), getRouteRefreshScore(currentPlan)) < 0
-    ? alternatePlan
-    : currentPlan;
 }
 
 export default function TreeCanvas({ tree }: TreeCanvasProps) {
@@ -565,8 +663,8 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const [connectSourceId, setConnectSourceId] = useState<string | null>(null);
   const [dragPosition, setDragPosition] = useState<DragPreview | null>(null);
   const [placementPreview, setPlacementPreview] = useState<PlacementPreview | null>(null);
-  const [allSetResult, setAllSetResult] = useState<{ tree: TreeMap; routes: DerivedRoute[] } | null>(null);
-  const [isAllSetPending, setIsAllSetPending] = useState(false);
+  const [teleportMode, setTeleportMode] = useState<TeleportMode | null>(null);
+  const [copyArrowMode, setCopyArrowMode] = useState<CopyArrowMode | null>(null);
   const [snapToGrid, setSnapToGrid] = useState(() => {
     try {
       return localStorage.getItem(SNAP_TO_GRID_STORAGE_KEY) === "true";
@@ -589,16 +687,10 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressActive = useRef(false);
   const arrowPressRef = useRef<ArrowPressState | null>(null);
-  const allSetPendingRef = useRef(false);
-  const latestTreeRef = useRef(tree);
   // The committed route set is calculated once per roadmap change. Pointer
   // handlers and render reuse it so a dense Tree 2 long press never starts by
   // synchronously deriving all routes a second time.
   const committedRoutes = useMemo(() => buildDerivedRoutes(tree), [tree]);
-
-  useEffect(() => {
-    latestTreeRef.current = tree;
-  }, [tree]);
 
   useEffect(() => {
     try {
@@ -719,6 +811,96 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     setConnectMode(false);
   }
 
+  function beginTeleport(nodeId: string) {
+    setAddNodeMode(false);
+    setConnectMode(false);
+    setConnectSourceId(null);
+    setCopyArrowMode(null);
+    setPlacementPreview(null);
+    setTeleportMode({ nodeId, baselineRoutes: new Map(committedRoutes.map(({ source, target, route }) => [routeKey(source.id, target.id), route])) });
+    setActionPanelTarget(null);
+    toast.message("Teleport ready", { description: "Tap one empty canvas space for the new node position." });
+  }
+
+  function rejectTeleport(message: string, description: string) {
+    setTeleportMode(null);
+    toast.message(message, { description });
+  }
+
+  function completeTeleport(point: Point) {
+    const currentTeleport = teleportMode;
+    if (!currentTeleport) return;
+    setTeleportMode(null);
+    const validation = validateTeleportDestination(tree, currentTeleport.nodeId, point, currentTeleport.baselineRoutes);
+    if (!validation.valid) {
+      rejectTeleport(
+        validation.reason === "node-overlap" ? "Space occupied" : "No free arrow lane in five bends",
+        validation.reason === "node-overlap" ? "Choose a clear canvas area for the node." : "This move would make an existing arrow unclean."
+      );
+      return;
+    }
+    dispatch({ type: "MOVE_NODE", treeId: tree.id, nodeId: currentTeleport.nodeId, x: point.x, y: point.y });
+    toast.success("Node teleported");
+  }
+
+  function createCopyGroupId(): string {
+    return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${tree.id}-copy-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function beginCopyArrow(sourceId: string, targetId: string, copyMode: "head" | "tail") {
+    const original = tree.nodeMap[sourceId]?.children.find((child) => child.targetId === targetId);
+    if (!original) return;
+    setAddNodeMode(false);
+    setConnectMode(false);
+    setConnectSourceId(null);
+    setTeleportMode(null);
+    setPlacementPreview(null);
+    setCopyArrowMode({ sourceId, targetId, copyMode, groupId: original.groupId ?? createCopyGroupId() });
+    setActionPanelTarget(null);
+    toast.message(copyMode === "head" ? "Copy head ready" : "Copy tail ready", {
+      description: copyMode === "head" ? "Tap a new destination node." : "Tap a new source node.",
+    });
+  }
+
+  function completeCopyArrow(destinationNodeId: string) {
+    const currentCopy = copyArrowMode;
+    if (!currentCopy) return;
+    const originalSource = tree.nodeMap[currentCopy.sourceId];
+    const originalChild = originalSource?.children.find((child) => child.targetId === currentCopy.targetId);
+    if (!originalSource || !originalChild) {
+      setCopyArrowMode(null);
+      return;
+    }
+    const newSourceId = currentCopy.copyMode === "head" ? currentCopy.sourceId : destinationNodeId;
+    const newTargetId = currentCopy.copyMode === "head" ? destinationNodeId : currentCopy.targetId;
+    const newSource = tree.nodeMap[newSourceId];
+    if (!newSource || newSourceId === newTargetId) {
+      toast.message("Choose a different node", { description: "A copied arrow needs two different nodes." });
+      return;
+    }
+    if (newSource.children.some((child) => child.targetId === newTargetId)) {
+      toast.message("Arrow already exists", { description: "That directed connection is already on the roadmap." });
+      return;
+    }
+    const testNodeMap = Object.fromEntries(Object.entries(tree.nodeMap).map(([id, node]) => [id, { ...node, children: node.children.map((child) => ({ ...child })) }]));
+    const groupId = originalChild.groupId ?? currentCopy.groupId;
+    testNodeMap[currentCopy.sourceId].children = testNodeMap[currentCopy.sourceId].children.map((child) => child.targetId === currentCopy.targetId ? { ...child, groupId } : child);
+    testNodeMap[newSourceId].children.push({ targetId: newTargetId, color: originalChild.color, groupId });
+    const testTree = { ...tree, nodeMap: testNodeMap, root: tree.root ? testNodeMap[tree.root.id] ?? null : null };
+    const candidateRoutes = buildDerivedRoutes(testTree);
+    const newRoute = candidateRoutes.find(({ source, target }) => source.id === newSourceId && target.id === newTargetId)?.route;
+    const baselineRoutes = new Map(committedRoutes.map(({ source, target, route }) => [routeKey(source.id, target.id), route]));
+    if (!newRoute?.clean || introducesNewRouteProblems(baselineRoutes, candidateRoutes)) {
+      toast.message("Copy would disrupt arrow lanes", { description: "Choose another node or move a node first." });
+      return;
+    }
+    dispatch({ type: "ADD_COPY_ARROW", treeId: tree.id, sourceId: currentCopy.sourceId, targetId: currentCopy.targetId, destinationNodeId, copyMode: currentCopy.copyMode, groupId });
+    setCopyArrowMode(null);
+    toast.success("Copy arrow added");
+  }
+
   function makePlacementNode(point: Point): NodeData {
     return {
       id: `${tree.id}-placement-preview`,
@@ -759,6 +941,14 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   function beginNodePointer(e: React.PointerEvent<SVGGElement>, node: NodeData) {
     e.preventDefault();
     e.stopPropagation();
+    if (teleportMode) {
+      rejectTeleport("Teleport needs empty space", "Nodes and arrows cannot be used as a teleport destination.");
+      return;
+    }
+    if (copyArrowMode) {
+      completeCopyArrow(node.id);
+      return;
+    }
     if (addNodeMode) {
       rejectPlacement("Node not placed", "Tap an empty canvas area.");
       return;
@@ -827,37 +1017,17 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     dragRef.current = null;
   }
 
-  function refreshAllRoutes() {
-    if (allSetPendingRef.current) return;
-    const treeAtStart = tree;
-    const previousRoutes = allSetResult?.tree === tree ? allSetResult.routes : committedRoutes;
-    const previousScore = getRouteRefreshScore(previousRoutes);
-    allSetPendingRef.current = true;
-    setIsAllSetPending(true);
-
-    // Two frames let the browser paint the requested progress circle before
-    // the complete route calculation begins on dense tablet roadmaps.
-    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
-      const refreshedRoutes = buildAllSetRoutes(treeAtStart);
-      allSetPendingRef.current = false;
-      setIsAllSetPending(false);
-      if (latestTreeRef.current !== treeAtStart) {
-        toast.message("Map changed during recalculation", { description: "All Set left the newest node positions untouched." });
-        return;
-      }
-      setAllSetResult({ tree: treeAtStart, routes: refreshedRoutes });
-      const refreshedScore = getRouteRefreshScore(refreshedRoutes);
-      if (compareRouteRefreshScores(refreshedScore, previousScore) < 0) {
-        toast.success("Arrows improved", { description: "All Set applied the cleanest available full-map lanes." });
-      } else {
-        toast.success("All arrows checked", { description: "The current node positions already use the best available lanes." });
-      }
-    }));
-  }
-
   function beginArrowPointer(e: React.PointerEvent<SVGPathElement>, sourceId: string, targetId: string, route: Route) {
     e.preventDefault();
     e.stopPropagation();
+    if (teleportMode) {
+      rejectTeleport("Teleport needs empty space", "Nodes and arrows cannot be used as a teleport destination.");
+      return;
+    }
+    if (copyArrowMode) {
+      toast.message("Choose a node", { description: "The copied arrow needs a node at its new endpoint." });
+      return;
+    }
     if (addNodeMode) {
       rejectPlacement("Node not placed", "A node cannot be placed directly on an arrow.");
       return;
@@ -890,7 +1060,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     const svg = svgRef.current;
     if (!svg) return;
     const rect = svg.getBoundingClientRect();
-    if (addNodeMode) {
+    if (addNodeMode || teleportMode || copyArrowMode) {
       setIsPanning(false);
       return;
     }
@@ -941,14 +1111,28 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
 
   function handleMouseDown(e: React.MouseEvent<SVGSVGElement>) {
     if ((e.target as Element).closest("[data-node-id]") || (e.target as Element).closest("[data-arrow-id]")) return;
-    if (addNodeMode) return;
+    if (addNodeMode || teleportMode || copyArrowMode) return;
     setIsPanning(true);
     panStart.current = { x: e.clientX, y: e.clientY };
   }
 
   function handleSvgPointerDown(e: React.PointerEvent<SVGSVGElement>) {
-    if (!addNodeMode) return;
-    if ((e.target as Element).closest("[data-node-id]") || (e.target as Element).closest("[data-arrow-id]")) return;
+    const target = e.target as Element;
+    const isNonEmptyCanvas = Boolean(target.closest("[data-node-id]") || target.closest("[data-arrow-id]"));
+    if (teleportMode) {
+      if (isNonEmptyCanvas) {
+        rejectTeleport("Teleport needs empty space", "Nodes and arrows cannot be used as a teleport destination.");
+        return;
+      }
+      const point = worldPoint(e.clientX, e.clientY);
+      if (point) completeTeleport(point);
+      return;
+    }
+    if (copyArrowMode) {
+      if (!isNonEmptyCanvas) toast.message("Choose a node", { description: "The copied arrow needs a node at its new endpoint." });
+      return;
+    }
+    if (!addNodeMode || isNonEmptyCanvas) return;
     const point = worldPoint(e.clientX, e.clientY);
     if (!point) return;
     addIndependentNode(point);
@@ -976,7 +1160,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const positionOverride = dragPosition ? { nodeId: dragPosition.nodeId, x: dragPosition.x, y: dragPosition.y } : undefined;
   const positionOf = (node: NodeData): NodeData => positionOverride?.nodeId === node.id ? { ...node, x: positionOverride.x, y: positionOverride.y } : node;
   const displayNodes = useMemo(() => nodes.map(positionOf), [nodes, positionOverride?.nodeId, positionOverride?.x, positionOverride?.y]);
-  const routes = dragPosition?.routes ?? (allSetResult?.tree === tree ? allSetResult.routes : committedRoutes);
+  const routes = dragPosition?.routes ?? committedRoutes;
   const bridgePoints = useMemo(() => routes.map((current, index) => {
     const currentSegments = toSegments(current.route.points);
     const crossings: Array<{ point: Point; segment: Segment }> = [];
@@ -989,15 +1173,51 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     return crossings;
   }), [routes]);
 
+  const copyRenderGeometry = useMemo<CopyRenderGeometry>(() => {
+    const visibleSegmentsByKey = new Map<string, Segment[]>();
+    const selectableSegmentsByKey = new Map<string, Segment[]>();
+    const sharedSegmentsByKey = new Map<string, Segment[]>();
+    const ordered = [...routes].sort((left, right) => left.reservationIndex - right.reservationIndex);
+    for (const current of ordered) {
+      const key = routeKey(current.source.id, current.target.id);
+      const segments = toSegments(current.route.points);
+      if (!current.groupId || segments.length === 0) {
+        visibleSegmentsByKey.set(key, segments);
+        selectableSegmentsByKey.set(key, segments);
+        sharedSegmentsByKey.set(key, []);
+        continue;
+      }
+      const currentStart = current.route.points[0];
+      const currentEnd = current.route.points[current.route.points.length - 1];
+      const peers = routes.filter((other) => {
+        if (other === current || other.groupId !== current.groupId) return false;
+        const otherStart = other.route.points[0];
+        const otherEnd = other.route.points[other.route.points.length - 1];
+        return Boolean(currentStart && currentEnd && otherStart && otherEnd && (pointEquals(currentStart, otherStart) || pointEquals(currentEnd, otherEnd)));
+      });
+      const earlierPeerSegments = peers.filter((other) => other.reservationIndex < current.reservationIndex).flatMap((other) => toSegments(other.route.points));
+      const allPeerSegments = peers.flatMap((other) => toSegments(other.route.points));
+      visibleSegmentsByKey.set(key, segments.flatMap((segment) => subtractCollinearOverlaps(segment, earlierPeerSegments)));
+      selectableSegmentsByKey.set(key, segments.flatMap((segment) => subtractCollinearOverlaps(segment, allPeerSegments)));
+      sharedSegmentsByKey.set(key, segments.flatMap((segment) => collinearOverlaps(segment, allPeerSegments)));
+    }
+    return { visibleSegmentsByKey, selectableSegmentsByKey, sharedSegmentsByKey };
+  }, [routes]);
+
   function renderEdges(): ReactNode[] {
     return routes.map(({ source, target, route }, index) => {
       if (route.points.length < 2) return null;
       const arrowColor = source.children.find((child) => child.targetId === target.id)?.color ?? "blue";
       const key = `${tree.id}-${source.id}-${target.id}`;
+      const routeId = routeKey(source.id, target.id);
+      const visibleSegments = copyRenderGeometry.visibleSegmentsByKey.get(routeId) ?? toSegments(route.points);
+      const selectableSegments = copyRenderGeometry.selectableSegmentsByKey.get(routeId) ?? toSegments(route.points);
+      const sharedSegments = copyRenderGeometry.sharedSegmentsByKey.get(routeId) ?? [];
       return (
         <g key={key} data-arrow-id={key}>
-          <path d={route.path} fill="none" stroke="transparent" strokeWidth={18} style={{ cursor: "pointer" }} onPointerDown={(e) => beginArrowPointer(e, source.id, target.id, route)} onPointerMove={moveArrowPointer} onPointerUp={finishArrowPointer} onPointerCancel={finishArrowPointer} />
-          <path d={route.path} fill="none" stroke={VIBGYOR_COLORS[arrowColor]} strokeWidth={2} strokeOpacity={0.72} strokeLinecap="round" strokeLinejoin="round" pointerEvents="none" />
+          {selectableSegments.map((segment, segmentIndex) => <path key={`${key}-hit-${segmentIndex}`} d={pathFromSegment(segment)} fill="none" stroke="transparent" strokeWidth={18} style={{ cursor: "pointer" }} onPointerDown={(e) => beginArrowPointer(e, source.id, target.id, route)} onPointerMove={moveArrowPointer} onPointerUp={finishArrowPointer} onPointerCancel={finishArrowPointer} />)}
+          {sharedSegments.map((segment, segmentIndex) => <path key={`${key}-shared-hit-${segmentIndex}`} d={pathFromSegment(segment)} fill="none" stroke="transparent" strokeWidth={18} pointerEvents={addNodeMode || teleportMode || copyArrowMode ? "stroke" : "none"} onPointerDown={(e) => beginArrowPointer(e, source.id, target.id, route)} />)}
+          {visibleSegments.map((segment, segmentIndex) => <path key={`${key}-ink-${segmentIndex}`} d={pathFromSegment(segment)} fill="none" stroke={VIBGYOR_COLORS[arrowColor]} strokeWidth={2} strokeOpacity={0.72} strokeLinecap="round" strokeLinejoin="round" pointerEvents="none" />)}
           {bridgePoints[index].map(({ point, segment }, crossingIndex) => (
             <g key={`${key}-bridge-${crossingIndex}`} pointerEvents="none">
               <circle cx={point.x} cy={point.y} r={5.5} fill="#0a0a0f" />
@@ -1079,9 +1299,11 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       </svg>
 
       <div className="absolute left-5 top-16 z-10 flex max-w-[calc(100%-2.5rem)] flex-wrap items-center gap-2">
-        <button onClick={() => { setAddNodeMode((mode) => !mode); setConnectMode(false); setConnectSourceId(null); setPlacementPreview(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${addNodeMode ? "border-[#8bb7ff] bg-[#8bb7ff]/15 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#3B82F6]/60 hover:text-white"}`} title="Place one node"><Plus className="h-4 w-4" />{addNodeMode ? "Place node" : "Add node"}</button>
-        <button onClick={() => { setConnectMode((mode) => !mode); setAddNodeMode(false); setConnectSourceId(null); setPlacementPreview(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${connectMode ? "border-[#3B82F6] bg-[#3B82F6]/15 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#3B82F6]/60 hover:text-white"}`} title="Connect two nodes"><Link2 className="h-4 w-4" /><span>{connectMode ? (connectSourceId ? "Select target" : "Select source") : "Connect nodes"}</span></button>
+        <button onClick={() => { setAddNodeMode((mode) => !mode); setConnectMode(false); setConnectSourceId(null); setTeleportMode(null); setCopyArrowMode(null); setPlacementPreview(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${addNodeMode ? "border-[#8bb7ff] bg-[#8bb7ff]/15 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#3B82F6]/60 hover:text-white"}`} title="Place one node"><Plus className="h-4 w-4" />{addNodeMode ? "Place node" : "Add node"}</button>
+        <button onClick={() => { setConnectMode((mode) => !mode); setAddNodeMode(false); setConnectSourceId(null); setTeleportMode(null); setCopyArrowMode(null); setPlacementPreview(null); }} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${connectMode ? "border-[#3B82F6] bg-[#3B82F6]/15 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#c4c4cc] hover:border-[#3B82F6]/60 hover:text-white"}`} title="Connect two nodes"><Link2 className="h-4 w-4" /><span>{connectMode ? (connectSourceId ? "Select target" : "Select source") : "Connect nodes"}</span></button>
         {connectMode && <button onClick={() => { setConnectMode(false); setConnectSourceId(null); }} className="rounded-lg border border-[#2a2a35] bg-[#13131a] p-2 text-[#8a8a95] hover:text-white" title="Cancel connection mode"><MousePointer2 className="h-4 w-4" /></button>}
+        {teleportMode && <button onClick={() => setTeleportMode(null)} className="flex items-center gap-2 rounded-lg border border-[#8bb7ff] bg-[#8bb7ff]/15 px-3 py-2 text-xs text-white transition-all active:scale-95" title="Cancel teleport"><MousePointer2 className="h-4 w-4" />Teleport: tap empty space</button>}
+        {copyArrowMode && <button onClick={() => setCopyArrowMode(null)} className="flex items-center gap-2 rounded-lg border border-[#8bb7ff] bg-[#8bb7ff]/15 px-3 py-2 text-xs text-white transition-all active:scale-95" title="Cancel copy arrow"><MousePointer2 className="h-4 w-4" />Copy: choose {copyArrowMode.copyMode === "head" ? "destination" : "source"}</button>}
         <button
           onClick={() => setSnapToGrid((enabled) => !enabled)}
           aria-pressed={snapToGrid}
@@ -1090,19 +1312,10 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
         >
           <Grid3X3 className="h-4 w-4" />Snap {snapToGrid ? "on" : "off"}
         </button>
-        <button
-          onClick={refreshAllRoutes}
-          disabled={isAllSetPending}
-          className="flex items-center gap-2 rounded-lg border border-[#3459b8] bg-[#1e3a8a]/20 px-3 py-2 text-xs text-[#dbeafe] transition-all hover:border-[#5d87ff] hover:bg-[#2a4ca0]/25 active:scale-95 disabled:cursor-wait disabled:opacity-80"
-          title="Recalculate every arrow without moving nodes"
-        >
-          {isAllSetPending ? <Spinner className="h-4 w-4 text-[#8bb7ff]" /> : <WandSparkles className="h-4 w-4" />}
-          {isAllSetPending ? "Setting arrows…" : "All Set"}
-        </button>
         <div className="flex items-center gap-1 rounded-lg border border-[#2a2a35] bg-[#13131a] p-1">
           <button onClick={() => { if (canUndo) dispatch({ type: "UNDO" }); }} disabled={!canUndo} aria-disabled={!canUndo} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white disabled:pointer-events-none disabled:cursor-not-allowed disabled:text-[#4a4a56] disabled:hover:bg-transparent disabled:hover:text-[#4a4a56]" title="Undo"><Undo2 className="h-4 w-4" /></button>
           <button onClick={() => { if (canRedo) dispatch({ type: "REDO" }); }} disabled={!canRedo} aria-disabled={!canRedo} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white disabled:pointer-events-none disabled:cursor-not-allowed disabled:text-[#4a4a56] disabled:hover:bg-transparent disabled:hover:text-[#4a4a56]" title="Redo"><Redo2 className="h-4 w-4" /></button>
-          <button onClick={() => { setConnectMode(false); setConnectSourceId(null); dispatch({ type: "RESET" }); toast.success("Demo roadmaps restored"); }} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white" title="Reset demo roadmaps"><RotateCcw className="h-4 w-4" /></button>
+          <button onClick={() => { setConnectMode(false); setConnectSourceId(null); setTeleportMode(null); setCopyArrowMode(null); dispatch({ type: "RESET" }); toast.success("Demo roadmaps restored"); }} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white" title="Reset demo roadmaps"><RotateCcw className="h-4 w-4" /></button>
         </div>
       </div>
 
@@ -1112,7 +1325,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
         <button onClick={fitToContent} className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#2a2a35] bg-[#13131a] text-[#e4e4e7] transition-all hover:border-[#3a3a45] hover:bg-[#1a1a24] active:scale-95" title="Fit all content"><Home className="h-5 w-5" strokeWidth={1.5} /></button>
       </div>
 
-      {actionPanelTarget && <ActionPanel x={actionPanelScreenPos.x} y={actionPanelScreenPos.y} target={actionPanelTarget} tree={tree} dispatch={dispatch} onClose={() => setActionPanelTarget(null)} />}
+      {actionPanelTarget && <ActionPanel x={actionPanelScreenPos.x} y={actionPanelScreenPos.y} target={actionPanelTarget} tree={tree} dispatch={dispatch} onTeleport={beginTeleport} onCopyArrow={beginCopyArrow} onClose={() => setActionPanelTarget(null)} />}
       {popupNodeId && tree.nodeMap[popupNodeId] && <NodePopup
         node={tree.nodeMap[popupNodeId]}
         treeId={tree.id}

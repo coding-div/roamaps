@@ -24,6 +24,15 @@ export type RoadmapAction =
   | { type: "UPDATE_POPUP_CONTENT"; treeId: string; nodeId: string; content: string }
   | { type: "UPDATE_NODE_COLOR"; treeId: string; nodeId: string; color: NodeColor }
   | { type: "ADD_ARROW"; treeId: string; sourceId: string; targetId: string; color: NodeColor }
+  | {
+    type: "ADD_COPY_ARROW";
+    treeId: string;
+    sourceId: string;
+    targetId: string;
+    destinationNodeId: string;
+    copyMode: "head" | "tail";
+    groupId: string;
+  }
   | { type: "REMOVE_ARROW"; treeId: string; sourceId: string; targetId: string }
   | { type: "UPDATE_ARROW_COLOR"; treeId: string; sourceId: string; targetId: string; color: NodeColor }
   | { type: "UNDO" }
@@ -103,6 +112,30 @@ function syncRoot(tree: TreeMap, nodeMap: Record<string, NodeData>): TreeMap {
   return { ...tree, nodeMap, root: rootId ? nodeMap[rootId] ?? null : null };
 }
 
+/** Copy-group identity is only useful while at least two arrows share it. */
+function normalizeCopyGroups(nodeMap: Record<string, NodeData>): void {
+  const counts = new Map<string, number>();
+  for (const node of Object.values(nodeMap)) {
+    for (const child of node.children) {
+      if (child.groupId) counts.set(child.groupId, (counts.get(child.groupId) ?? 0) + 1);
+    }
+  }
+  for (const node of Object.values(nodeMap)) {
+    node.children = node.children.map((child) => {
+      if (child.groupId && (counts.get(child.groupId) ?? 0) < 2) {
+        const { groupId: _groupId, ...ordinaryChild } = child;
+        return ordinaryChild;
+      }
+      return child;
+    });
+  }
+}
+
+function syncRootAndNormalizeCopyGroups(tree: TreeMap, nodeMap: Record<string, NodeData>): TreeMap {
+  normalizeCopyGroups(nodeMap);
+  return syncRoot(tree, nodeMap);
+}
+
 type TreeContentAction = Extract<RoadmapAction, { treeId: string }>;
 
 function applyContentAction(trees: TreeMap[], action: TreeContentAction): TreeMap[] {
@@ -137,6 +170,7 @@ function applyContentAction(trees: TreeMap[], action: TreeContentAction): TreeMa
           }
         }
         const removedRoot = tree.root?.id === action.nodeId;
+        normalizeCopyGroups(nodeMap);
         return {
           ...tree,
           nodeMap,
@@ -178,13 +212,28 @@ function applyContentAction(trees: TreeMap[], action: TreeContentAction): TreeMa
         source.children = [...source.children, { targetId: action.targetId, color: action.color }];
         return syncRoot(tree, nodeMap);
       }
+      case "ADD_COPY_ARROW": {
+        const originalSource = nodeMap[action.sourceId];
+        const originalChild = originalSource?.children.find((child) => child.targetId === action.targetId);
+        if (!originalSource || !originalChild || !nodeMap[action.destinationNodeId]) return tree;
+
+        const newSourceId = action.copyMode === "head" ? action.sourceId : action.destinationNodeId;
+        const newTargetId = action.copyMode === "head" ? action.destinationNodeId : action.targetId;
+        const newSource = nodeMap[newSourceId];
+        if (!newSource || newSourceId === newTargetId || newSource.children.some((child) => child.targetId === newTargetId)) return tree;
+
+        const groupId = originalChild.groupId ?? action.groupId;
+        originalSource.children = originalSource.children.map((child) => child.targetId === action.targetId ? { ...child, groupId } : child);
+        newSource.children = [...newSource.children, { targetId: newTargetId, color: originalChild.color, groupId }];
+        return syncRootAndNormalizeCopyGroups(tree, nodeMap);
+      }
       case "REMOVE_ARROW": {
         const source = nodeMap[action.sourceId];
         if (!source) return tree;
         const nextChildren = source.children.filter((child) => child.targetId !== action.targetId);
         if (nextChildren.length === source.children.length) return tree;
         source.children = nextChildren;
-        return syncRoot(tree, nodeMap);
+        return syncRootAndNormalizeCopyGroups(tree, nodeMap);
       }
       case "UPDATE_ARROW_COLOR": {
         const source = nodeMap[action.sourceId];
@@ -266,8 +315,9 @@ function loadInitialState(): HistoryState {
             popupContent: node.popupContent ?? "",
             children: (node.children ?? [])
               .filter((child) => validIds.has(child.targetId) && !(child as { splitJoinerId?: string }).splitJoinerId)
-              .map((child) => ({ targetId: child.targetId, color: child.color })),
+              .map((child) => ({ targetId: child.targetId, color: child.color, ...(child.groupId ? { groupId: child.groupId } : {}) })),
           }])) as Record<string, NodeData>;
+          normalizeCopyGroups(nodeMap);
           const rootId = tree.root?.id;
           return { ...tree, root: rootId ? nodeMap[rootId] ?? null : null, nodeMap };
         });

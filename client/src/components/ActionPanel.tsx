@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { VIBGYOR_COLORS, type NodeColor, COLOR_ORDER, type TreeMap, type NodeData } from "@/lib/treeData";
 import type { RoadmapAction } from "@/contexts/RoadmapContext";
-import { Palette, Type, Trash2, X, Check, Maximize2, AlertTriangle } from "lucide-react";
+import { Palette, Type, Trash2, X, Check, Maximize2, AlertTriangle, Copy, MapPinned } from "lucide-react";
 import { toast } from "sonner";
 
 type PanelTarget =
@@ -19,11 +19,13 @@ interface ActionPanelProps {
   target: PanelTarget;
   tree: TreeMap;
   dispatch: React.Dispatch<RoadmapAction>;
+  onTeleport: (nodeId: string) => void;
+  onCopyArrow: (sourceId: string, targetId: string, copyMode: "head" | "tail") => void;
   onClose: () => void;
 }
 
-export default function ActionPanel({ x, y, target, tree, dispatch, onClose }: ActionPanelProps) {
-  const [mode, setMode] = useState<"menu" | "editColor" | "editName" | "confirmRemove">("menu");
+export default function ActionPanel({ x, y, target, tree, dispatch, onTeleport, onCopyArrow, onClose }: ActionPanelProps) {
+  const [mode, setMode] = useState<"menu" | "editColor" | "editName" | "copyDirection" | "confirmRemove">("menu");
   const panelRef = useRef<HTMLDivElement>(null);
   const selectedNode = target.type === "node" ? tree.nodeMap[target.nodeId] : undefined;
   const adjustedX = x + 240 > window.innerWidth ? Math.max(12, x - 250) : x + 20;
@@ -76,7 +78,7 @@ export default function ActionPanel({ x, y, target, tree, dispatch, onClose }: A
       <div className="overflow-hidden rounded-lg border border-[#2a2a35] bg-[#13131a] shadow-2xl shadow-black/50" style={{ minWidth: 220 }}>
         <div className="flex items-center justify-between border-b border-[#2a2a35] px-3 py-2">
           <p className="font-sans text-[11px] font-medium uppercase tracking-widest text-[#8a8a95]">
-            {mode === "menu" ? `${target.type === "node" ? "Node" : "Arrow"} actions` : mode === "editColor" ? "Pick color" : mode === "editName" ? "Edit label" : "Confirm removal"}
+            {mode === "menu" ? `${target.type === "node" ? "Node" : "Arrow"} actions` : mode === "editColor" ? "Pick color" : mode === "editName" ? "Edit label" : mode === "copyDirection" ? "Copy arrow" : "Confirm removal"}
           </p>
           <button onClick={onClose} className="flex h-5 w-5 items-center justify-center text-[#8a8a95] hover:text-[#e4e4e7]" aria-label="Close actions"><X className="h-3.5 w-3.5" /></button>
         </div>
@@ -85,11 +87,19 @@ export default function ActionPanel({ x, y, target, tree, dispatch, onClose }: A
           <MenuButton icon={<Palette className="h-4 w-4" />} label="Recolor" onClick={() => setMode("editColor")} />
           {target.type === "node" && <MenuButton icon={<Type className="h-4 w-4" />} label="Edit Label" onClick={() => setMode("editName")} />}
           {target.type === "node" && <MenuButton icon={<Maximize2 className="h-4 w-4" />} label="Resize" onClick={() => toast.message("Resize coming soon")} />}
+          {target.type === "node" && <MenuButton icon={<MapPinned className="h-4 w-4" />} label="Teleport" onClick={() => { onTeleport(target.nodeId); onClose(); }} />}
+          {target.type === "arrow" && <MenuButton icon={<Copy className="h-4 w-4" />} label="Copy Arrow" onClick={() => setMode("copyDirection")} />}
           <MenuButton icon={<Trash2 className="h-4 w-4" />} label={`Remove ${target.type === "node" ? "Node" : "Arrow"}`} danger onClick={remove} />
         </div>}
 
         {mode === "editColor" && <div className="p-3"><div className="flex flex-wrap justify-center gap-2.5">{COLOR_ORDER.map((color) => <button key={color} className="h-8 w-8 rounded-full border border-transparent transition-transform hover:scale-110 hover:border-white/40 active:scale-90" style={{ backgroundColor: VIBGYOR_COLORS[color], boxShadow: `0 0 8px ${VIBGYOR_COLORS[color]}55` }} onClick={() => changeColor(color)} title={color} aria-label={`Use ${color}`} />)}</div><button onClick={() => setMode("menu")} className="mt-3 w-full text-center text-xs text-[#8a8a95] hover:text-[#e4e4e7]">← Back</button></div>}
         {mode === "editName" && target.type === "node" && <NameEditor node={selectedNode} onSave={saveLabel} onCancel={() => setMode("menu")} />}
+        {mode === "copyDirection" && target.type === "arrow" && <div className="space-y-2 p-3">
+          <p className="text-xs leading-5 text-[#c4c4cc]">Choose the shared endpoint, then tap the new node.</p>
+          <button onClick={() => onCopyArrow(target.sourceId, target.targetId, "head")} className="w-full rounded-md border border-[#3459b8] bg-[#1e3a8a]/20 px-3 py-2 text-left text-xs text-[#dbeafe] transition-colors hover:border-[#5d87ff] hover:bg-[#2a4ca0]/25"><strong className="block font-medium">Head</strong><span className="text-[#9fb4e8]">Keep the tail; choose a new destination.</span></button>
+          <button onClick={() => onCopyArrow(target.sourceId, target.targetId, "tail")} className="w-full rounded-md border border-[#2a2a35] bg-[#1e1e2a] px-3 py-2 text-left text-xs text-[#e4e4e7] transition-colors hover:border-[#3a3a45] hover:bg-[#242432]"><strong className="block font-medium">Tail</strong><span className="text-[#9ba3b7]">Keep the head; choose a new source.</span></button>
+          <button onClick={() => setMode("menu")} className="w-full pt-1 text-center text-xs text-[#8a8a95] hover:text-[#e4e4e7]">← Back</button>
+        </div>}
         {mode === "confirmRemove" && <div className="p-3">
           <div className="flex gap-2 text-xs leading-5 text-[#c4c4cc]"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[#f97316]" /><p>This node contains popup text. Removing it will remove the text too.</p></div>
           <div className="mt-3 flex gap-2"><button onClick={confirmRemove} className="flex-1 rounded-md bg-[#ef4444] py-2 text-xs font-medium text-white hover:bg-[#dc2626] active:scale-95">Remove</button><button onClick={() => setMode("menu")} className="flex-1 rounded-md bg-[#1e1e2a] py-2 text-xs text-[#c4c4cc] hover:bg-[#2a2a35] active:scale-95">Cancel</button></div>

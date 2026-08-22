@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getNodeBox } from "@/lib/collision";
 import { allTrees, getAllEdges, type NodeData, type TreeMap } from "@/lib/treeData";
-import { buildAllSetRoutes, buildDerivedRoutes, buildEdgePortPlans, compareRouteRefreshScores, getOrthogonalRoute, getRouteRefreshScore, resolveDraggedNodeCentre, snapNodeCentreToGrid } from "./TreeCanvas";
+import { buildDerivedRoutes, buildEdgePortPlans, getOrthogonalRoute, resolveDraggedNodeCentre, snapNodeCentreToGrid, validateTeleportDestination } from "./TreeCanvas";
 
 function node(id: string, x: number, y: number): NodeData {
   return { id, x, y, label: "", color: "blue", children: [], popupContent: "" };
@@ -198,15 +198,56 @@ describe("getOrthogonalRoute", () => {
     expect(performance.now() - startedAt).toBeLessThan(160);
   });
 
-  it("evaluates a whole-map All Set route plan without moving any nodes or accepting a worse result", () => {
-    const tree2 = allTrees.find((tree) => tree.id === "tree-2");
-    expect(tree2).toBeDefined();
-    const beforePositions = Object.fromEntries(Object.values(tree2!.nodeMap).map((current) => [current.id, { x: current.x, y: current.y }]));
-    const currentRoutes = buildDerivedRoutes(tree2!);
-    const refreshedRoutes = buildAllSetRoutes(tree2!);
+  it("accepts a Teleport to a valid empty position", () => {
+    const root = node("root", 0, 0);
+    const movable = node("movable", 220, 0);
+    const tree: TreeMap = { id: "teleport-valid", title: "Teleport", description: "", root, nodeMap: { root, movable }, maxDepth: 1 };
 
-    expect(Object.fromEntries(Object.values(tree2!.nodeMap).map((current) => [current.id, { x: current.x, y: current.y }]))).toEqual(beforePositions);
-    expect(refreshedRoutes.map(({ source, target }) => `${source.id}->${target.id}`)).toEqual(currentRoutes.map(({ source, target }) => `${source.id}->${target.id}`));
-    expect(compareRouteRefreshScores(getRouteRefreshScore(refreshedRoutes), getRouteRefreshScore(currentRoutes))).toBeLessThanOrEqual(0);
+    expect(validateTeleportDestination(tree, "movable", { x: 320, y: 180 })).toEqual({ valid: true, reason: null });
+  });
+
+  it("rejects a Teleport to an occupied position", () => {
+    const root = node("root", 0, 0);
+    const movable = node("movable", 220, 0);
+    const tree: TreeMap = { id: "teleport-occupied", title: "Teleport", description: "", root, nodeMap: { root, movable }, maxDepth: 1 };
+
+    expect(validateTeleportDestination(tree, "movable", { x: 0, y: 0 })).toEqual({ valid: false, reason: "node-overlap" });
+  });
+
+  it("gives copy-arrow members a common port and a shared clean trunk", () => {
+    const source = {
+      ...node("source", 0, 0),
+      children: [
+        { targetId: "upper", color: "blue" as const, groupId: "copy-1" },
+        { targetId: "lower", color: "red" as const, groupId: "copy-1" },
+      ],
+    };
+    const upper = node("upper", 300, -80);
+    const lower = node("lower", 300, 80);
+    const tree: TreeMap = { id: "copy-trunk", title: "Copy", description: "", root: source, nodeMap: { source, upper, lower }, maxDepth: 1 };
+    const routes = buildDerivedRoutes(tree);
+
+    expect(routes).toHaveLength(2);
+    expect(routes.every(({ route }) => route.clean)).toBe(true);
+    expect(routes[0].route.points[0]).toEqual(routes[1].route.points[0]);
+    expect(routes[0].groupId).toBe("copy-1");
+    expect(routes[1].groupId).toBe("copy-1");
+  });
+
+  it("lets a copy group separate when its members no longer share a physical port", () => {
+    const source = {
+      ...node("source", 0, 0),
+      children: [
+        { targetId: "right", color: "blue" as const, groupId: "copy-2" },
+        { targetId: "left", color: "red" as const, groupId: "copy-2" },
+      ],
+    };
+    const right = node("right", 300, 0);
+    const left = node("left", -300, 0);
+    const tree: TreeMap = { id: "copy-separate", title: "Copy", description: "", root: source, nodeMap: { source, right, left }, maxDepth: 1 };
+    const routes = buildDerivedRoutes(tree);
+
+    expect(routes.every(({ route }) => route.clean)).toBe(true);
+    expect(routes[0].route.points[0]).not.toEqual(routes[1].route.points[0]);
   });
 });

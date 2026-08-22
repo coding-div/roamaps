@@ -49,6 +49,11 @@ export interface ChildRef {
   targetId: string;
   /** Independent color for this specific arrow/edge */
   color: NodeColor;
+  /**
+   * Optional hidden identity shared by copy-arrow members. A missing value
+   * means the arrow remains an ordinary independent connection.
+   */
+  groupId?: string;
 }
 
 export interface TreeMap {
@@ -69,12 +74,14 @@ export function getAllEdges(tree: TreeMap): Array<{
   source: NodeData;
   target: NodeData;
   arrowColor: NodeColor;
+  groupId?: string;
   sourceChildIndex: number;
 }> {
   const edges: Array<{
     source: NodeData;
     target: NodeData;
     arrowColor: NodeColor;
+    groupId?: string;
     sourceChildIndex: number;
   }> = [];
 
@@ -89,6 +96,7 @@ export function getAllEdges(tree: TreeMap): Array<{
           source: node,
           target,
           arrowColor: childRef.color,
+          groupId: childRef.groupId,
           sourceChildIndex: i,
         });
       }
