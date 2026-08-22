@@ -809,8 +809,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const [viewBox, setViewBox] = useState<ViewBox>(() => tree.maxDepth <= 3 ? { x: -500, y: -700, w: 1000, h: 1400 } : { x: -1400, y: -1600, w: 2800, h: 3200 });
   const [isPanning, setIsPanning] = useState(false);
   const panStart = useRef({ x: 0, y: 0 });
-  const latestPanPointerRef = useRef<DragPointerSample | null>(null);
-  const panFrameRef = useRef<number | null>(null);
+  const canvasPanPointerRef = useRef<number | null>(null);
   const initialPinchDistance = useRef<number | null>(null);
   const initialViewBoxOnPinch = useRef<ViewBox | null>(null);
   const pinchCenter = useRef({ x: 0, y: 0 });
@@ -829,7 +828,6 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
 
   useEffect(() => () => {
     if (dragFrameRef.current !== null) cancelAnimationFrame(dragFrameRef.current);
-    if (panFrameRef.current !== null) cancelAnimationFrame(panFrameRef.current);
   }, []);
 
   useEffect(() => {
@@ -1236,29 +1234,19 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     if (!svg) return;
     const rect = svg.getBoundingClientRect();
     if (addNodeMode || teleportMode || copyArrowMode) {
+      canvasPanPointerRef.current = null;
       setIsPanning(false);
       return;
     }
     if (e.touches.length === 2) {
       e.preventDefault();
+      canvasPanPointerRef.current = null;
       isPinching.current = true;
       const [a, b] = [e.touches[0], e.touches[1]];
       initialPinchDistance.current = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
       initialViewBoxOnPinch.current = { ...viewBox };
       pinchCenter.current = { x: ((a.clientX + b.clientX) / 2 - rect.left) / rect.width, y: ((a.clientY + b.clientY) / 2 - rect.top) / rect.height };
       setIsPanning(false);
-    } else if (e.touches.length === 1) {
-      const touch = e.touches[0];
-      const target = document.elementFromPoint(touch.clientX, touch.clientY);
-      // Node and arrow presses belong to the SVG gesture system. Cancelling the
-      // native touch start here prevents Android from treating a long press as
-      // page-text selection, while leaving ordinary page scrolling untouched.
-      if (target?.closest("[data-node-id]") || target?.closest("[data-arrow-id]")) {
-        e.preventDefault();
-        return;
-      }
-      setIsPanning(true);
-      panStart.current = { x: touch.clientX, y: touch.clientY };
     }
   }
 
@@ -1275,51 +1263,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       const newH = initial.h / scale;
       if (newW > 8000 || newW < 150) return;
       setViewBox({ x: initial.x + (initial.w - newW) * pinchCenter.current.x, y: initial.y + (initial.h - newH) * pinchCenter.current.y, w: newW, h: newH });
-    } else if (e.touches.length === 1 && isPanning) {
-      const touch = e.touches[0];
-      queuePan({ clientX: touch.clientX, clientY: touch.clientY });
     }
-  }
-
-  function handleMouseDown(e: React.MouseEvent<SVGSVGElement>) {
-    if ((e.target as Element).closest("[data-node-id]") || (e.target as Element).closest("[data-arrow-id]")) return;
-    if (addNodeMode || teleportMode || copyArrowMode) return;
-    setIsPanning(true);
-    panStart.current = { x: e.clientX, y: e.clientY };
-  }
-
-  function queuePan(sample: DragPointerSample) {
-    latestPanPointerRef.current = sample;
-    if (panFrameRef.current !== null) return;
-    panFrameRef.current = requestAnimationFrame(() => {
-      panFrameRef.current = null;
-      const latest = latestPanPointerRef.current;
-      const svg = svgRef.current;
-      if (!latest || !svg) return;
-      const rect = svg.getBoundingClientRect();
-      setViewBox((previous) => {
-        const dx = ((latest.clientX - panStart.current.x) / rect.width) * previous.w;
-        const dy = ((latest.clientY - panStart.current.y) / rect.height) * previous.h;
-        return { ...previous, x: previous.x - dx, y: previous.y - dy };
-      });
-      panStart.current = { x: latest.clientX, y: latest.clientY };
-    });
-  }
-
-  function flushPan() {
-    if (panFrameRef.current === null) return;
-    cancelAnimationFrame(panFrameRef.current);
-    panFrameRef.current = null;
-    const latest = latestPanPointerRef.current;
-    const svg = svgRef.current;
-    if (!latest || !svg) return;
-    const rect = svg.getBoundingClientRect();
-    setViewBox((previous) => {
-      const dx = ((latest.clientX - panStart.current.x) / rect.width) * previous.w;
-      const dy = ((latest.clientY - panStart.current.y) / rect.height) * previous.h;
-      return { ...previous, x: previous.x - dx, y: previous.y - dy };
-    });
-    panStart.current = { x: latest.clientX, y: latest.clientY };
   }
 
   function handleSvgPointerDown(e: React.PointerEvent<SVGSVGElement>) {
@@ -1345,14 +1289,44 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   }
 
   function handleSvgPointerMove(e: React.PointerEvent<SVGSVGElement>) {
+    if (canvasPanPointerRef.current === e.pointerId && !isPinching.current) {
+      const svg = svgRef.current;
+      if (!svg) return;
+      const rect = svg.getBoundingClientRect();
+      const dx = (e.clientX - panStart.current.x) / rect.width;
+      const dy = (e.clientY - panStart.current.y) / rect.height;
+      setViewBox((previous) => ({ ...previous, x: previous.x - dx * previous.w, y: previous.y - dy * previous.h }));
+      panStart.current = { x: e.clientX, y: e.clientY };
+      return;
+    }
     if (!addNodeMode) return;
     const point = worldPoint(e.clientX, e.clientY);
     if (point) updatePlacementPreview(point, Boolean((e.target as Element).closest("[data-arrow-id]")));
   }
 
-  function handleMouseMove(e: React.MouseEvent<SVGSVGElement>) {
-    if (!isPanning) return;
-    queuePan({ clientX: e.clientX, clientY: e.clientY });
+  function beginCanvasPan(e: React.PointerEvent<SVGSVGElement>) {
+    const target = e.target as Element;
+    const isNonEmptyCanvas = Boolean(target.closest("[data-node-id]") || target.closest("[data-arrow-id]"));
+    if (isNonEmptyCanvas || addNodeMode || teleportMode || copyArrowMode) return;
+    canvasPanPointerRef.current = e.pointerId;
+    panStart.current = { x: e.clientX, y: e.clientY };
+    setIsPanning(true);
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // A cancelled touch can lose capture before the browser reports its end.
+    }
+  }
+
+  function finishCanvasPointer(e: React.PointerEvent<SVGSVGElement>) {
+    if (canvasPanPointerRef.current !== e.pointerId) return;
+    canvasPanPointerRef.current = null;
+    setIsPanning(false);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // Capture may already have been released by the browser.
+    }
   }
 
   const nodes = useMemo(() => getNodesFromTree(tree), [tree]);
@@ -1361,6 +1335,11 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const positionOf = (node: NodeData): NodeData => positionOverride?.nodeId === node.id ? { ...node, x: positionOverride.x, y: positionOverride.y } : node;
   const displayNodes = useMemo(() => nodes.map(positionOf), [nodes, positionOverride?.nodeId, positionOverride?.x, positionOverride?.y]);
   const routes = dragPosition?.routes ?? committedRoutes;
+  // Performance-only rule: while a node owns a drag gesture, arrow hit regions
+  // cannot be selected. Do not recreate their invisible SVG paths on every
+  // preview frame; route strokes, bridges, arrowheads, and all routing remain
+  // unchanged.
+  const routeHitTestingLocked = Boolean(dragPosition);
   const bridgePoints = useMemo(() => routes.map((current, index) => {
     const currentSegments = toSegments(current.route.points);
     const crossings: Array<{ point: Point; segment: Segment }> = [];
@@ -1378,6 +1357,13 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     const selectableSegmentsByKey = new Map<string, Segment[]>();
     const sharedSegmentsByKey = new Map<string, Segment[]>();
     const ordered = [...routes].sort((left, right) => left.reservationIndex - right.reservationIndex);
+    const routesByCopyGroup = new Map<string, DerivedRoute[]>();
+    for (const route of routes) {
+      if (!route.groupId) continue;
+      const groupRoutes = routesByCopyGroup.get(route.groupId) ?? [];
+      groupRoutes.push(route);
+      routesByCopyGroup.set(route.groupId, groupRoutes);
+    }
     for (const current of ordered) {
       const key = routeKey(current.source.id, current.target.id);
       const segments = toSegments(current.route.points);
@@ -1389,7 +1375,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       }
       const currentStart = current.route.points[0];
       const currentEnd = current.route.points[current.route.points.length - 1];
-      const peers = routes.filter((other) => {
+      const peers = (routesByCopyGroup.get(current.groupId) ?? []).filter((other) => {
         if (other === current || other.groupId !== current.groupId) return false;
         const otherStart = other.route.points[0];
         const otherEnd = other.route.points[other.route.points.length - 1];
@@ -1415,8 +1401,8 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       const sharedSegments = copyRenderGeometry.sharedSegmentsByKey.get(routeId) ?? [];
       return (
         <g key={key} data-arrow-id={key}>
-          {selectableSegments.map((segment, segmentIndex) => <path key={`${key}-hit-${segmentIndex}`} d={pathFromSegment(segment)} fill="none" stroke="transparent" strokeWidth={18} style={{ cursor: "pointer" }} onPointerDown={(e) => beginArrowPointer(e, source.id, target.id, route)} onPointerMove={moveArrowPointer} onPointerUp={finishArrowPointer} onPointerCancel={finishArrowPointer} />)}
-          {sharedSegments.map((segment, segmentIndex) => <path key={`${key}-shared-hit-${segmentIndex}`} d={pathFromSegment(segment)} fill="none" stroke="transparent" strokeWidth={18} pointerEvents={addNodeMode || teleportMode || copyArrowMode ? "stroke" : "none"} onPointerDown={(e) => beginArrowPointer(e, source.id, target.id, route)} />)}
+          {!routeHitTestingLocked && selectableSegments.map((segment, segmentIndex) => <path key={`${key}-hit-${segmentIndex}`} d={pathFromSegment(segment)} fill="none" stroke="transparent" strokeWidth={18} style={{ cursor: "pointer" }} onPointerDown={(e) => beginArrowPointer(e, source.id, target.id, route)} onPointerMove={moveArrowPointer} onPointerUp={finishArrowPointer} onPointerCancel={finishArrowPointer} />)}
+          {!routeHitTestingLocked && sharedSegments.map((segment, segmentIndex) => <path key={`${key}-shared-hit-${segmentIndex}`} d={pathFromSegment(segment)} fill="none" stroke="transparent" strokeWidth={18} pointerEvents={addNodeMode || teleportMode || copyArrowMode ? "stroke" : "none"} onPointerDown={(e) => beginArrowPointer(e, source.id, target.id, route)} />)}
           {visibleSegments.map((segment, segmentIndex) => <path key={`${key}-ink-${segmentIndex}`} d={pathFromSegment(segment)} fill="none" stroke={VIBGYOR_COLORS[arrowColor]} strokeWidth={2} strokeOpacity={0.72} strokeLinecap="round" strokeLinejoin="round" pointerEvents="none" />)}
           {bridgePoints[index].map(({ point, segment }, crossingIndex) => (
             <g key={`${key}-bridge-${crossingIndex}`} pointerEvents="none">
@@ -1489,7 +1475,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
 
   return (
     <div ref={containerRef} className="relative h-full w-full select-none overflow-hidden" style={{ background: "#0a0a0f", userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none" }}>
-      <svg ref={svgRef} width="100%" height="100%" viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`} onPointerDown={handleSvgPointerDown} onPointerMove={handleSvgPointerMove} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={() => { flushPan(); setIsPanning(false); }} onMouseLeave={() => { flushPan(); setIsPanning(false); setPlacementPreview(null); }} onContextMenu={(e) => e.preventDefault()} onWheel={(e) => { e.preventDefault(); const rect = svgRef.current?.getBoundingClientRect(); if (rect) zoomByFactor(e.deltaY > 0 ? 1.12 : 0.89, (e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height); }} onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={() => { flushPan(); setIsPanning(false); isPinching.current = false; initialPinchDistance.current = null; }} style={{ cursor: addNodeMode ? "crosshair" : isPanning ? "grabbing" : "grab", touchAction: "none", userSelect: "none", WebkitUserSelect: "none" }}>
+      <svg ref={svgRef} width="100%" height="100%" viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`} onPointerDown={(event) => { beginCanvasPan(event); handleSvgPointerDown(event); }} onPointerMove={handleSvgPointerMove} onPointerUp={finishCanvasPointer} onPointerCancel={finishCanvasPointer} onPointerLeave={() => { if (canvasPanPointerRef.current === null) setPlacementPreview(null); }} onContextMenu={(e) => e.preventDefault()} onWheel={(e) => { e.preventDefault(); const rect = svgRef.current?.getBoundingClientRect(); if (rect) zoomByFactor(e.deltaY > 0 ? 1.12 : 0.89, (e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height); }} onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={() => { canvasPanPointerRef.current = null; setIsPanning(false); isPinching.current = false; initialPinchDistance.current = null; }} style={{ cursor: addNodeMode ? "crosshair" : isPanning ? "grabbing" : "grab", touchAction: "none", userSelect: "none", WebkitUserSelect: "none" }}>
         <DotGrid />
         <rect width="10000" height="10000" x={-5000} y={-5000} fill="url(#dotGrid)" />
         {renderEdges()}
