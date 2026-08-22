@@ -25,7 +25,7 @@ import {
 import { useRoadmaps } from "@/contexts/RoadmapContext";
 import { findProgressivePrototypeRoute, PrototypeLaneIndex, type PrototypeNode, type PrototypePort, type PrototypeSegment } from "@/lib/progressiveRouter";
 import { toast } from "sonner";
-import { Grid3X3, Home, Link2, Minus, MousePointer2, Plus, Redo2, RotateCcw, Undo2 } from "lucide-react";
+import { Home, Link2, Minus, MousePointer2, Plus, Redo2, Undo2 } from "lucide-react";
 import ActionPanel from "./ActionPanel";
 import NodePopup from "./NodePopup";
 
@@ -791,7 +791,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   const [placementPreview, setPlacementPreview] = useState<PlacementPreview | null>(null);
   const [teleportMode, setTeleportMode] = useState<TeleportMode | null>(null);
   const [copyArrowMode, setCopyArrowMode] = useState<CopyArrowMode | null>(null);
-  const [snapToGrid, setSnapToGrid] = useState(() => {
+  const [snapToGrid] = useState(() => {
     try {
       return localStorage.getItem(SNAP_TO_GRID_STORAGE_KEY) === "true";
     } catch {
@@ -829,14 +829,6 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   useEffect(() => () => {
     if (dragFrameRef.current !== null) cancelAnimationFrame(dragFrameRef.current);
   }, []);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(SNAP_TO_GRID_STORAGE_KEY, String(snapToGrid));
-    } catch {
-      // The editor remains usable when browser storage is unavailable.
-    }
-  }, [snapToGrid]);
 
   const worldPoint = useCallback((clientX: number, clientY: number): Point | null => {
     const svg = svgRef.current;
@@ -1490,18 +1482,9 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
         {connectMode && <button onClick={() => { setConnectMode(false); setConnectSourceId(null); }} className="rounded-lg border border-[#2a2a35] bg-[#13131a] p-2 text-[#8a8a95] hover:text-white" title="Cancel connection mode"><MousePointer2 className="h-4 w-4" /></button>}
         {teleportMode && <button onClick={() => setTeleportMode(null)} className="flex items-center gap-2 rounded-lg border border-[#8bb7ff] bg-[#8bb7ff]/15 px-3 py-2 text-xs text-white transition-all active:scale-95" title="Cancel teleport"><MousePointer2 className="h-4 w-4" />Teleport: tap empty space</button>}
         {copyArrowMode && <button onClick={() => setCopyArrowMode(null)} className="flex items-center gap-2 rounded-lg border border-[#8bb7ff] bg-[#8bb7ff]/15 px-3 py-2 text-xs text-white transition-all active:scale-95" title="Cancel copy arrow"><MousePointer2 className="h-4 w-4" />Copy: choose {copyArrowMode.copyMode === "head" ? "destination" : "source"}</button>}
-        <button
-          onClick={() => setSnapToGrid((enabled) => !enabled)}
-          aria-pressed={snapToGrid}
-          className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all active:scale-95 ${snapToGrid ? "border-[#6f92ff] bg-[#4c7dff]/15 text-white" : "border-[#2a2a35] bg-[#13131a] text-[#9ba3b7] hover:border-[#3B82F6]/60 hover:text-white"}`}
-          title={snapToGrid ? "Grid snap is on — drag to align nodes to dots" : "Grid snap is off — drag nodes freely"}
-        >
-          <Grid3X3 className="h-4 w-4" />Snap {snapToGrid ? "on" : "off"}
-        </button>
         <div className="flex items-center gap-1 rounded-lg border border-[#2a2a35] bg-[#13131a] p-1">
           <button onClick={() => { if (canUndo) dispatch({ type: "UNDO" }); }} disabled={!canUndo} aria-disabled={!canUndo} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white disabled:pointer-events-none disabled:cursor-not-allowed disabled:text-[#4a4a56] disabled:hover:bg-transparent disabled:hover:text-[#4a4a56]" title="Undo"><Undo2 className="h-4 w-4" /></button>
           <button onClick={() => { if (canRedo) dispatch({ type: "REDO" }); }} disabled={!canRedo} aria-disabled={!canRedo} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white disabled:pointer-events-none disabled:cursor-not-allowed disabled:text-[#4a4a56] disabled:hover:bg-transparent disabled:hover:text-[#4a4a56]" title="Redo"><Redo2 className="h-4 w-4" /></button>
-          <button onClick={() => { setConnectMode(false); setConnectSourceId(null); setTeleportMode(null); setCopyArrowMode(null); dispatch({ type: "RESET" }); toast.success("Demo roadmaps restored"); }} className="rounded-md p-2 text-[#c4c4cc] transition-colors hover:bg-[#1e1e2a] hover:text-white" title="Reset demo roadmaps"><RotateCcw className="h-4 w-4" /></button>
         </div>
       </div>
 

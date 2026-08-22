@@ -3,9 +3,8 @@
  * disconnected nodes, and make every visible edit undoable as one action.
  */
 
-import { createContext, useContext, useEffect, useMemo, useReducer, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useState, type ReactNode } from "react";
 import {
-  allTrees,
   type NodeColor,
   type NodeData,
   type TreeMap,
@@ -13,10 +12,13 @@ import {
 import { canPlaceNode } from "@/lib/collision";
 
 const STORAGE_KEY = "roamaps-roadmaps-v1";
+const BIN_STORAGE_KEY = "roamaps-bin-v1";
 const MAX_HISTORY = 60;
 
 export type RoadmapAction =
   | { type: "ADD_TREE"; tree: TreeMap }
+  | { type: "REMOVE_TREE"; treeId: string }
+  | { type: "UPDATE_TREE_TITLE"; treeId: string; title: string }
   | { type: "ADD_NODE"; treeId: string; node: NodeData }
   | { type: "REMOVE_NODE"; treeId: string; nodeId: string }
   | { type: "MOVE_NODE"; treeId: string; nodeId: string; x: number; y: number }
@@ -143,6 +145,10 @@ function applyContentAction(trees: TreeMap[], action: TreeContentAction): TreeMa
     const nodeMap = { ...tree.nodeMap };
 
     switch (action.type) {
+      case "UPDATE_TREE_TITLE": {
+        const title = action.title.trim().slice(0, 120);
+        return title ? { ...tree, title } : tree;
+      }
       case "ADD_NODE":
         if (nodeMap[action.node.id] || !canPlaceNode(action.node, Object.values(nodeMap), tree.root?.id ?? null)) return tree;
         nodeMap[action.node.id] = { ...action.node, popupContent: action.node.popupContent ?? "", children: [] };
@@ -273,10 +279,20 @@ function historyReducer(state: HistoryState, action: RoadmapAction): HistoryStat
     };
   }
 
-  if (action.type === "RESET") return commitEdit(state, cloneTrees(allTrees));
+  if (action.type === "RESET") return commitEdit(state, []);
   if (action.type === "ADD_TREE") {
     if (state.present.some((tree) => tree.id === action.tree.id)) return state;
-    return commitEdit(state, [...state.present, cloneTree(action.tree)]);
+    // Archive-level changes are intentionally separate from node-edit undo.
+    // A canvas Undo must never erase a newly created or restored Roadmap.
+    return { present: [...state.present, cloneTree(action.tree)], past: [], future: [] };
+  }
+  if (action.type === "REMOVE_TREE") {
+    if (!state.present.some((tree) => tree.id === action.treeId)) return state;
+    return { present: state.present.filter((tree) => tree.id !== action.treeId), past: [], future: [] };
+  }
+  if (action.type === "UPDATE_TREE_TITLE") {
+    const nextPresent = applyContentAction(state.present, action);
+    return sameTrees(state.present, nextPresent) ? state : { present: nextPresent, past: [], future: [] };
   }
   if (!("treeId" in action)) return state;
   if (action.type === "UPDATE_POPUP_CONTENT") {
@@ -290,8 +306,13 @@ function historyReducer(state: HistoryState, action: RoadmapAction): HistoryStat
 
 interface RoadmapContextValue {
   trees: TreeMap[];
+  bin: TreeMap[];
   dispatch: React.Dispatch<RoadmapAction>;
   getTree: (treeId: string) => TreeMap | undefined;
+  moveTreeToBin: (treeId: string) => void;
+  restoreTreeFromBin: (treeId: string) => void;
+  deleteTreeFromBin: (treeId: string) => void;
+  emptyBin: () => void;
   canUndo: boolean;
   canRedo: boolean;
   undoRequiresConfirmation: boolean;
@@ -301,37 +322,51 @@ interface RoadmapContextValue {
 
 const RoadmapContext = createContext<RoadmapContextValue | null>(null);
 
+function normalizeStoredTrees(value: unknown): TreeMap[] | null {
+  if (!Array.isArray(value)) return null;
+  const normalized = value.map((tree) => {
+    const rawTree = tree as TreeMap;
+    const rawEntries = Object.entries(rawTree.nodeMap ?? {}).filter(([, node]) => (node as NodeData & { kind?: string }).kind !== "joiner");
+    const validIds = new Set(rawEntries.map(([id]) => id));
+    const nodeMap = Object.fromEntries(rawEntries.map(([id, node]) => [id, {
+      ...node,
+      popupContent: node.popupContent ?? "",
+      children: (node.children ?? [])
+        .filter((child) => validIds.has(child.targetId) && !(child as { splitJoinerId?: string }).splitJoinerId)
+        .map((child) => ({ targetId: child.targetId, color: child.color, ...(child.groupId ? { groupId: child.groupId } : {}) })),
+    }])) as Record<string, NodeData>;
+    normalizeCopyGroups(nodeMap);
+    const rootId = rawTree.root?.id;
+    return { ...rawTree, root: rootId ? nodeMap[rootId] ?? null : null, nodeMap };
+  });
+  return normalized;
+}
+
 function loadInitialState(): HistoryState {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
-      const parsed = JSON.parse(saved) as TreeMap[];
-      if (Array.isArray(parsed)) {
-        const normalized = parsed.map((tree) => {
-          const rawEntries = Object.entries(tree.nodeMap ?? {}).filter(([, node]) => (node as NodeData & { kind?: string }).kind !== "joiner");
-          const validIds = new Set(rawEntries.map(([id]) => id));
-          const nodeMap = Object.fromEntries(rawEntries.map(([id, node]) => [id, {
-            ...node,
-            popupContent: node.popupContent ?? "",
-            children: (node.children ?? [])
-              .filter((child) => validIds.has(child.targetId) && !(child as { splitJoinerId?: string }).splitJoinerId)
-              .map((child) => ({ targetId: child.targetId, color: child.color, ...(child.groupId ? { groupId: child.groupId } : {}) })),
-          }])) as Record<string, NodeData>;
-          normalizeCopyGroups(nodeMap);
-          const rootId = tree.root?.id;
-          return { ...tree, root: rootId ? nodeMap[rootId] ?? null : null, nodeMap };
-        });
-        return { present: normalized, past: [], future: [] };
-      }
+      const normalized = normalizeStoredTrees(JSON.parse(saved));
+      if (normalized) return { present: normalized, past: [], future: [] };
     }
   } catch {
-    // Fall back to the built-in demo trees if storage is unavailable or corrupt.
+    // A corrupt local archive must never block a new local workspace.
   }
-  return { present: cloneTrees(allTrees), past: [], future: [] };
+  return { present: [], past: [], future: [] };
+}
+
+function loadBin(): TreeMap[] {
+  try {
+    const saved = localStorage.getItem(BIN_STORAGE_KEY);
+    return saved ? normalizeStoredTrees(JSON.parse(saved)) ?? [] : [];
+  } catch {
+    return [];
+  }
 }
 
 export function RoadmapProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(historyReducer, undefined, loadInitialState);
+  const [bin, setBin] = useState<TreeMap[]>(loadBin);
 
   useEffect(() => {
     try {
@@ -341,18 +376,51 @@ export function RoadmapProvider({ children }: { children: ReactNode }) {
     }
   }, [state.present]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(BIN_STORAGE_KEY, JSON.stringify(bin));
+    } catch {
+      // Bin persistence is optional; active Roadmaps remain unaffected.
+    }
+  }, [bin]);
+
+  const moveTreeToBin = useCallback((treeId: string) => {
+    const tree = state.present.find((candidate) => candidate.id === treeId);
+    if (!tree) return;
+    setBin((current) => current.some((candidate) => candidate.id === treeId) ? current : [...current, cloneTree(tree)]);
+    dispatch({ type: "REMOVE_TREE", treeId });
+  }, [state.present]);
+
+  const restoreTreeFromBin = useCallback((treeId: string) => {
+    const tree = bin.find((candidate) => candidate.id === treeId);
+    if (!tree || state.present.some((candidate) => candidate.id === treeId)) return;
+    dispatch({ type: "ADD_TREE", tree: cloneTree(tree) });
+    setBin((current) => current.filter((candidate) => candidate.id !== treeId));
+  }, [bin, state.present]);
+
+  const deleteTreeFromBin = useCallback((treeId: string) => {
+    setBin((current) => current.filter((candidate) => candidate.id !== treeId));
+  }, []);
+
+  const emptyBin = useCallback(() => setBin([]), []);
+
   const value = useMemo(
     () => ({
       trees: state.present,
+      bin,
       dispatch,
       getTree: (treeId: string) => state.present.find((tree) => tree.id === treeId),
+      moveTreeToBin,
+      restoreTreeFromBin,
+      deleteTreeFromBin,
+      emptyBin,
       canUndo: state.past.length > 0,
       canRedo: state.future.length > 0,
       undoRequiresConfirmation: Boolean(state.past.length && popupDataWouldBeRemoved(state.present, state.past[state.past.length - 1])),
       redoRequiresConfirmation: Boolean(state.future.length && popupDataWouldBeRemoved(state.present, state.future[0])),
-      resetRequiresConfirmation: popupDataWouldBeRemoved(state.present, allTrees),
+      resetRequiresConfirmation: state.present.some((tree) => Object.values(tree.nodeMap).some((node) => Boolean((node.popupContent ?? "").trim()))),
     }),
-    [state]
+    [bin, deleteTreeFromBin, emptyBin, moveTreeToBin, restoreTreeFromBin, state]
   );
 
   return <RoadmapContext.Provider value={value}>{children}</RoadmapContext.Provider>;

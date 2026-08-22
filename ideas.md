@@ -73,3 +73,6 @@ The mark is a compact three-node route glyph: two cobalt points offset around a 
 - Roadmap examples use calm, real-feeling learning-map and route-archive names rather than placeholder tree labels.
 - The Home archive is visually connected to the hero through a restrained route trace and archive junction, so the page reads as one continuous cartographic workspace.
 - Route Cobalt remains reserved for active route markers, selected states, primary actions, and key junctions; it is not general decoration.
+- The Home wordmark resolves as one compact ROAMAPS lockup paired with the existing three-node route glyph; visual breaks must not make it read as separate words.
+- Archive entries are route sheets rather than generic product tiles. Their labels, previews, and metadata reinforce stored knowledge, local canvas state, and route topology.
+- Existing placeholder titles are presented as concrete learning-route names in the archive; newly created Roadmaps retain the names the user gives them.
