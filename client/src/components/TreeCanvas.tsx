@@ -54,6 +54,7 @@ interface Route { points: Point[]; path: string; targetDirection: Direction; mid
 interface DragState { nodeId: string; pointerId: number; startX: number; startY: number; moved: boolean; x: number; y: number; baselineRoutes: Map<string, Route> }
 interface ArrowPressState { pointerId: number; startX: number; startY: number }
 interface DragPreview { nodeId: string; x: number; y: number; valid: boolean; invalidReason: "node-overlap" | "route-lane" | null; routes: DerivedRoute[] }
+interface DragPointerSample { clientX: number; clientY: number }
 interface PlacementPreview { x: number; y: number; valid: boolean }
 type PanelTarget = { type: "node"; nodeId: string } | { type: "arrow"; sourceId: string; targetId: string };
 interface TeleportMode { nodeId: string; baselineRoutes: Map<string, Route> }
@@ -798,9 +799,18 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     }
   });
   const dragRef = useRef<DragState | null>(null);
+  // Obsidian Cartography performance rule: pointer hardware can report faster
+  // than the display refreshes. Keep only the newest input and calculate one
+  // validated preview per frame, so Tree 2 does not queue redundant route and
+  // SVG work while preserving the exact final release position.
+  const dragPreviewRef = useRef<DragPreview | null>(null);
+  const latestDragPointerRef = useRef<DragPointerSample | null>(null);
+  const dragFrameRef = useRef<number | null>(null);
   const [viewBox, setViewBox] = useState<ViewBox>(() => tree.maxDepth <= 3 ? { x: -500, y: -700, w: 1000, h: 1400 } : { x: -1400, y: -1600, w: 2800, h: 3200 });
   const [isPanning, setIsPanning] = useState(false);
   const panStart = useRef({ x: 0, y: 0 });
+  const latestPanPointerRef = useRef<DragPointerSample | null>(null);
+  const panFrameRef = useRef<number | null>(null);
   const initialPinchDistance = useRef<number | null>(null);
   const initialViewBoxOnPinch = useRef<ViewBox | null>(null);
   const pinchCenter = useRef({ x: 0, y: 0 });
@@ -816,6 +826,11 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
   // handlers and render reuse it so a dense Tree 2 long press never starts by
   // synchronously deriving all routes a second time.
   const committedRoutes = useMemo(() => buildDerivedRoutes(tree), [tree]);
+
+  useEffect(() => () => {
+    if (dragFrameRef.current !== null) cancelAnimationFrame(dragFrameRef.current);
+    if (panFrameRef.current !== null) cancelAnimationFrame(panFrameRef.current);
+  }, []);
 
   useEffect(() => {
     try {
@@ -1085,6 +1100,8 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     const point = worldPoint(e.clientX, e.clientY);
     if (!point) return;
     const baselineRoutes = new Map(committedRoutes.map(({ source, target, route }) => [routeKey(source.id, target.id), route]));
+    dragPreviewRef.current = null;
+    latestDragPointerRef.current = null;
     dragRef.current = { nodeId: node.id, pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, moved: false, x: node.x, y: node.y, baselineRoutes };
     try {
       e.currentTarget.setPointerCapture?.(e.pointerId);
@@ -1094,6 +1111,54 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     startLongPress({ type: "node", nodeId: node.id }, { x: node.x, y: node.y });
   }
 
+  function deriveDragPreview(drag: DragState, sample: DragPointerSample): DragPreview | null {
+    const point = worldPoint(sample.clientX, sample.clientY);
+    const startPoint = worldPoint(drag.startX, drag.startY);
+    if (!point || !startPoint) return null;
+    const node = tree.nodeMap[drag.nodeId];
+    if (!node) return null;
+    const centre = resolveDraggedNodeCentre({ x: drag.x + point.x - startPoint.x, y: drag.y + point.y - startPoint.y }, snapToGrid);
+    const candidate = { ...node, ...centre };
+    const routesForCandidate = buildDerivedRoutes(tree, { nodeId: drag.nodeId, x: candidate.x, y: candidate.y });
+    const nodeFits = canPlaceNode(candidate, Object.values(tree.nodeMap), tree.root?.id ?? null, drag.nodeId);
+    const routeProblem = nodeFits && introducesNewRouteProblems(drag.baselineRoutes, routesForCandidate);
+    return {
+      nodeId: drag.nodeId,
+      x: candidate.x,
+      y: candidate.y,
+      valid: nodeFits && !routeProblem,
+      invalidReason: !nodeFits ? "node-overlap" : routeProblem ? "route-lane" : null,
+      routes: routesForCandidate,
+    };
+  }
+
+  function publishLatestDragPreview() {
+    const drag = dragRef.current;
+    const sample = latestDragPointerRef.current;
+    if (!drag || !sample) return;
+    const preview = deriveDragPreview(drag, sample);
+    if (!preview) return;
+    dragPreviewRef.current = preview;
+    setDragPosition(preview);
+  }
+
+  function scheduleDragPreview(sample: DragPointerSample) {
+    latestDragPointerRef.current = sample;
+    if (dragFrameRef.current !== null) return;
+    dragFrameRef.current = requestAnimationFrame(() => {
+      dragFrameRef.current = null;
+      publishLatestDragPreview();
+    });
+  }
+
+  function flushDragPreview() {
+    if (dragFrameRef.current !== null) {
+      cancelAnimationFrame(dragFrameRef.current);
+      dragFrameRef.current = null;
+      publishLatestDragPreview();
+    }
+  }
+
   function moveNodePointer(e: React.PointerEvent<SVGGElement>) {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== e.pointerId) return;
@@ -1101,32 +1166,15 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     if (delta > NODE_DRAG_START_THRESHOLD) {
       drag.moved = true;
       endLongPress();
-      const point = worldPoint(e.clientX, e.clientY);
-      const startPoint = worldPoint(drag.startX, drag.startY);
-      if (point && startPoint) {
-        const node = tree.nodeMap[drag.nodeId];
-        if (!node) return;
-        const centre = resolveDraggedNodeCentre({ x: drag.x + point.x - startPoint.x, y: drag.y + point.y - startPoint.y }, snapToGrid);
-        const candidate = { ...node, ...centre };
-        const routesForCandidate = buildDerivedRoutes(tree, { nodeId: drag.nodeId, x: candidate.x, y: candidate.y });
-        const nodeFits = canPlaceNode(candidate, Object.values(tree.nodeMap), tree.root?.id ?? null, drag.nodeId);
-        const routeProblem = nodeFits && introducesNewRouteProblems(drag.baselineRoutes, routesForCandidate);
-        setDragPosition({
-          nodeId: drag.nodeId,
-          x: candidate.x,
-          y: candidate.y,
-          valid: nodeFits && !routeProblem,
-          invalidReason: !nodeFits ? "node-overlap" : routeProblem ? "route-lane" : null,
-          routes: routesForCandidate,
-        });
-      }
+      scheduleDragPreview({ clientX: e.clientX, clientY: e.clientY });
     }
   }
 
   function finishNodePointer(e: React.PointerEvent<SVGGElement>) {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== e.pointerId) return;
-    const point = dragPosition?.nodeId === drag.nodeId ? dragPosition : null;
+    if (drag.moved) flushDragPreview();
+    const point = dragPreviewRef.current?.nodeId === drag.nodeId ? dragPreviewRef.current : null;
     const shortTap = !drag.moved && longPressActive.current;
     endLongPress();
     if (drag.moved && point) {
@@ -1139,6 +1187,8 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       openNodePopup(drag.nodeId);
     }
     setDragPosition(null);
+    dragPreviewRef.current = null;
+    latestDragPointerRef.current = null;
     dragRef.current = null;
   }
 
@@ -1227,10 +1277,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
       setViewBox({ x: initial.x + (initial.w - newW) * pinchCenter.current.x, y: initial.y + (initial.h - newH) * pinchCenter.current.y, w: newW, h: newH });
     } else if (e.touches.length === 1 && isPanning) {
       const touch = e.touches[0];
-      const dx = ((touch.clientX - panStart.current.x) / rect.width) * viewBox.w;
-      const dy = ((touch.clientY - panStart.current.y) / rect.height) * viewBox.h;
-      setViewBox((previous) => ({ ...previous, x: previous.x - dx, y: previous.y - dy }));
-      panStart.current = { x: touch.clientX, y: touch.clientY };
+      queuePan({ clientX: touch.clientX, clientY: touch.clientY });
     }
   }
 
@@ -1239,6 +1286,40 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
     if (addNodeMode || teleportMode || copyArrowMode) return;
     setIsPanning(true);
     panStart.current = { x: e.clientX, y: e.clientY };
+  }
+
+  function queuePan(sample: DragPointerSample) {
+    latestPanPointerRef.current = sample;
+    if (panFrameRef.current !== null) return;
+    panFrameRef.current = requestAnimationFrame(() => {
+      panFrameRef.current = null;
+      const latest = latestPanPointerRef.current;
+      const svg = svgRef.current;
+      if (!latest || !svg) return;
+      const rect = svg.getBoundingClientRect();
+      setViewBox((previous) => {
+        const dx = ((latest.clientX - panStart.current.x) / rect.width) * previous.w;
+        const dy = ((latest.clientY - panStart.current.y) / rect.height) * previous.h;
+        return { ...previous, x: previous.x - dx, y: previous.y - dy };
+      });
+      panStart.current = { x: latest.clientX, y: latest.clientY };
+    });
+  }
+
+  function flushPan() {
+    if (panFrameRef.current === null) return;
+    cancelAnimationFrame(panFrameRef.current);
+    panFrameRef.current = null;
+    const latest = latestPanPointerRef.current;
+    const svg = svgRef.current;
+    if (!latest || !svg) return;
+    const rect = svg.getBoundingClientRect();
+    setViewBox((previous) => {
+      const dx = ((latest.clientX - panStart.current.x) / rect.width) * previous.w;
+      const dy = ((latest.clientY - panStart.current.y) / rect.height) * previous.h;
+      return { ...previous, x: previous.x - dx, y: previous.y - dy };
+    });
+    panStart.current = { x: latest.clientX, y: latest.clientY };
   }
 
   function handleSvgPointerDown(e: React.PointerEvent<SVGSVGElement>) {
@@ -1271,16 +1352,10 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
 
   function handleMouseMove(e: React.MouseEvent<SVGSVGElement>) {
     if (!isPanning) return;
-    const svg = svgRef.current;
-    if (!svg) return;
-    const rect = svg.getBoundingClientRect();
-    const dx = ((e.clientX - panStart.current.x) / rect.width) * viewBox.w;
-    const dy = ((e.clientY - panStart.current.y) / rect.height) * viewBox.h;
-    setViewBox((previous) => ({ ...previous, x: previous.x - dx, y: previous.y - dy }));
-    panStart.current = { x: e.clientX, y: e.clientY };
+    queuePan({ clientX: e.clientX, clientY: e.clientY });
   }
 
-  const nodes = getNodesFromTree(tree);
+  const nodes = useMemo(() => getNodesFromTree(tree), [tree]);
   const rootId = tree.root?.id ?? null;
   const positionOverride = dragPosition ? { nodeId: dragPosition.nodeId, x: dragPosition.x, y: dragPosition.y } : undefined;
   const positionOf = (node: NodeData): NodeData => positionOverride?.nodeId === node.id ? { ...node, x: positionOverride.x, y: positionOverride.y } : node;
@@ -1414,7 +1489,7 @@ export default function TreeCanvas({ tree }: TreeCanvasProps) {
 
   return (
     <div ref={containerRef} className="relative h-full w-full select-none overflow-hidden" style={{ background: "#0a0a0f", userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none" }}>
-      <svg ref={svgRef} width="100%" height="100%" viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`} onPointerDown={handleSvgPointerDown} onPointerMove={handleSvgPointerMove} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={() => setIsPanning(false)} onMouseLeave={() => { setIsPanning(false); setPlacementPreview(null); }} onContextMenu={(e) => e.preventDefault()} onWheel={(e) => { e.preventDefault(); const rect = svgRef.current?.getBoundingClientRect(); if (rect) zoomByFactor(e.deltaY > 0 ? 1.12 : 0.89, (e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height); }} onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={() => { setIsPanning(false); isPinching.current = false; initialPinchDistance.current = null; }} style={{ cursor: addNodeMode ? "crosshair" : isPanning ? "grabbing" : "grab", touchAction: "none", userSelect: "none", WebkitUserSelect: "none" }}>
+      <svg ref={svgRef} width="100%" height="100%" viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`} onPointerDown={handleSvgPointerDown} onPointerMove={handleSvgPointerMove} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={() => { flushPan(); setIsPanning(false); }} onMouseLeave={() => { flushPan(); setIsPanning(false); setPlacementPreview(null); }} onContextMenu={(e) => e.preventDefault()} onWheel={(e) => { e.preventDefault(); const rect = svgRef.current?.getBoundingClientRect(); if (rect) zoomByFactor(e.deltaY > 0 ? 1.12 : 0.89, (e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height); }} onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={() => { flushPan(); setIsPanning(false); isPinching.current = false; initialPinchDistance.current = null; }} style={{ cursor: addNodeMode ? "crosshair" : isPanning ? "grabbing" : "grab", touchAction: "none", userSelect: "none", WebkitUserSelect: "none" }}>
         <DotGrid />
         <rect width="10000" height="10000" x={-5000} y={-5000} fill="url(#dotGrid)" />
         {renderEdges()}
