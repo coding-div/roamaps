@@ -76,6 +76,7 @@ import {
   type CfdJaalDocument,
   type CfdJaalPreview,
 } from "@/lib/cfdJaal";
+import { consumeSharedCfdJaal } from "@/lib/sharedCfdJaal";
 import { getAllEdges, type TreeMap } from "@/lib/treeData";
 
 const HOME_LAYOUT_STORAGE_KEY = "roamaps-home-layout-v1";
@@ -219,6 +220,24 @@ export default function Home() {
     try { localStorage.setItem(SNAP_TO_GRID_STORAGE_KEY, String(snapToGrid)); } catch { /* setting remains off if storage fails */ }
   }, [snapToGrid]);
 
+  useEffect(() => {
+    void (async () => {
+      const shared = await consumeSharedCfdJaal();
+      if (shared.reason === "invalid") {
+        toast.error("Roamaps can only receive a CFD Jaal (.cfdj) file from Share.");
+        return;
+      }
+      if (shared.reason === "error") {
+        toast.error("The shared file could not be opened. Please use Upload a file instead.");
+        return;
+      }
+      if (shared.file) {
+        toast.message("CFD Jaal received. Checking it safely…");
+        await readCfdJaalFile(shared.file);
+      }
+    })();
+  }, []);
+
   function openSheet(panel: SheetPanel) {
     if (panel === "profile") setProfileDraft(profile);
     setSheetPanel(panel);
@@ -293,13 +312,19 @@ export default function Home() {
 
     if (sheetPanel === "guide") return <>
       <button onClick={() => setSheetPanel("menu")} className="mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-[#7686b8] transition-colors hover:text-white">← Menu</button>
-      <h2 className="font-['Space_Grotesk',sans-serif] text-xl font-medium text-[#eef2ff]">Guide</h2><p className="text-sm leading-6 text-[#7a849d]">A few ways to begin your first Roadmap.</p>
+      <h2 className="font-['Space_Grotesk',sans-serif] text-xl font-medium text-[#eef2ff]">Useful features</h2><p className="text-sm leading-6 text-[#7a849d]">What each Roamaps tool is for, and when it helps.</p>
       <div className="mt-6 space-y-3">{[
-        ["1", "Start a Roadmap", "Choose Add Roadmap, then Create a new."],
-        ["2", "Build on the canvas", "Tap empty space to add nodes. Use Connect, and long-press for more actions."],
-        ["3", "Keep ideas together", "Use node pop-ups for unlimited notes, and Copy Arrow when two arrows should share a route."],
-        ["4", "Keep a portable copy", "Use a card menu to download one CFD Jaal file, then upload it on another device."],
-      ].map(([number, title, text]) => <div key={number} className="flex gap-3 border-l border-[#3d579c] bg-[#0d1119] px-3 py-3"><span className="font-mono text-xs text-[#8fa8ff]">{number}</span><div><p className="text-sm font-medium text-[#edf1ff]">{title}</p><p className="mt-1 text-xs leading-5 text-[#78839d]">{text}</p></div></div>)}</div>
+        ["01", "Build a map", "Tap empty canvas to add a node. Drag it to place the idea; Connect adds one safe directional arrow between two nodes."],
+        ["02", "Use long press", "Long-press a node for label editing, full notes, colour, Teleport, and removal. Long-press an arrow for its own tools."],
+        ["03", "Keep full context", "A node can stay short on the map while its pop-up note holds long writing. Save a note before closing it."],
+        ["04", "Move difficult nodes", "Teleport lets you choose a new empty place once. Roamaps checks the node and its arrows before accepting it."],
+        ["05", "Use Copy Arrow", "Choose Head or Tail Copy Arrow when arrows should share a route for as long as possible, then separate only for their own destination."],
+        ["06", "Control the view", "Use zoom, finger pinch, canvas drag, and Home to navigate large Roadmaps. Snap to Grid is optional in Settings."],
+        ["07", "Keep Roadmaps safe", "Rename, Download CFD Jaal, or Move to Bin from a Roadmap’s three-dot menu. Bin lets you Restore before permanent deletion."],
+        ["08", "Move a Roadmap between devices", "On any device, use Add Roadmap → Upload a file. On Android after installing Roamaps, open Files, tap Share on a .cfdj file, then choose Roamaps."],
+        ["09", "Choose the right screen", "Home works on computer, tablet, and phone. The editor works everywhere, but an Android tablet gives the best space for dense routes and dragging."],
+      ].map(([number, title, text]) => <div key={number} className="flex gap-3 border-l border-[#3d579c] bg-[#0d1119] px-3 py-3"><span className="font-mono text-[10px] text-[#8fa8ff]">{number}</span><div><p className="text-sm font-medium text-[#edf1ff]">{title}</p><p className="mt-1 text-xs leading-5 text-[#78839d]">{text}</p></div></div>)}</div>
+      <button onClick={() => uploadInputRef.current?.click()} className="mt-5 flex w-full items-center justify-center gap-2 border border-[#4e6fc8] bg-[#152243] px-4 py-3 text-sm font-medium text-[#dbe5ff] transition-colors hover:bg-[#1c3163]"><FileUp className="h-4 w-4" />Open CFD Jaal file</button>
     </>;
 
     return <>

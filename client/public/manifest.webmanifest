@@ -1,0 +1,41 @@
+{
+  "name": "Roamaps — visual thinking instrument",
+  "short_name": "Roamaps",
+  "description": "A local-first visual roadmap editor for connected ideas.",
+  "id": "/",
+  "start_url": "/#/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#090a0f",
+  "theme_color": "#090a0f",
+  "icons": [
+    {
+      "src": "/manus-storage/roamaps-mark_a6c218e4.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/manus-storage/roamaps-mark_a6c218e4.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "share_target": {
+    "action": "/share-cfd",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "files": [
+        {
+          "name": "cfdJaal",
+          "accept": [
+            "application/vnd.roamaps.cfd-jaal+json",
+            ".cfdj"
+          ]
+        }
+      ]
+    }
+  }
+}
